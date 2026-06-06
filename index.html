@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Ровное дыхание — IMU Biofeedback (автокорреляция)</title>
+  <title>Ровное дыхание — IMU Biofeedback (гироскоп Z)</title>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
     html,body { width:100%; height:100%; overflow:hidden; background:#000; font-family:system-ui,sans-serif; }
@@ -45,7 +45,7 @@
       const gainUpBtn = document.getElementById('gain-up');
       const gainDownBtn = document.getElementById('gain-down');
 
-      // Визуальные кольца
+      // Визуализация
       const RINGS = [
         { count:28, rMin:55, rMax:110, dMin:6, dMax:10, rot:0.20 },
         { count:32, rMin:85, rMax:165, dMin:7, dMax:10, rot:0.10 },
@@ -58,49 +58,44 @@
       let targetStability = 0, currentStability = 0;
       let breathPhase = 0, simTime = 0, lastFrameTs = 0;
 
-      // График дыхания (только для визуализации)
+      // График дыхания
       const BREATH_HIST = 400;
       let breathGraph = new Float32Array(BREATH_HIST);
       let graphIdx = 0, graphFull = false;
 
-      // Сигнальный тракт
+      // Сигнал
       let sensorActive = false;
-      let signalGain = 1.0;
+      let signalGain = 1.0;         // усиление для гироскопа (обычно 1-3 достаточно)
 
-      // Буфер для автокорреляции: 5 секунд при ~50 Гц => 250 отсчётов
+      // Буфер сырых данных для автокорреляции (5 секунд при ~50 Гц)
       const RAW_BUF_LEN = 256;
       let rawBuffer = new Float32Array(RAW_BUF_LEN);
       let rawBufIdx = 0, rawBufFull = false;
 
-      // Результаты оценки периода
+      // Оценка периода
       const MAX_PERIODS = 8;
-      let periodEstimates = [];       // последние N оценок (в мс)
-      let currentPeriodMs = 4000;     // текущая сглаженная оценка
+      let periodEstimates = [];
+      let currentPeriodMs = 4000;
 
-      // Фильтр для отображения дыхания
+      // Фильтр для визуализации дыхания (лёгкий bandpass)
       class SimpleBandpass {
-        constructor() {
-          this.fast = 0; this.slow = 0;
-          this.initialized = false;
-        }
+        constructor() { this.fast = 0; this.slow = 0; this.init = false; }
         process(x, dtMs) {
-          if (!this.initialized) { this.fast = this.slow = x; this.initialized = true; return 0; }
+          if(!this.init) { this.fast = this.slow = x; this.init = true; return 0; }
           const aFast = Math.min(1, dtMs/1000 / 0.22);
           const aSlow = Math.min(1, dtMs/1000 / 1.8);
           this.fast += aFast * (x - this.fast);
           this.slow += aSlow * (x - this.slow);
           return this.fast - this.slow;
         }
-        reset() { this.fast = this.slow = 0; this.initialized = false; }
+        reset() { this.fast = this.slow = 0; this.init = false; }
       }
       const bandpass = new SimpleBandpass();
 
-      // Предыдущее сырое значение и время для фильтра
-      let prevRaw = null;
+      // Время для dt
       let prevRawTime = 0;
-      const MAX_DELTA = 2.0;
 
-      // Управление усилением
+      // Усиление
       gainUpBtn.addEventListener('click', ()=> { signalGain = Math.min(5.0, signalGain+0.2); });
       gainDownBtn.addEventListener('click', ()=> { signalGain = Math.max(0.2, signalGain-0.2); });
 
@@ -141,23 +136,17 @@
       }
       window.addEventListener('resize', resize);
 
-      // --- Автокорреляция ---
+      // Автокорреляция для поиска периода дыхания в буфере
       function computePeriodFromBuffer(buf, length, fsEstimate) {
-        // buf - Float32Array длины length (кольцевой, но мы передаём упорядоченную копию)
-        // fsEstimate - приблизительная частота дискретизации (событий/сек)
-        // Ищем период в диапазоне 1-10 сек (индексы от fsEstimate*1 до fsEstimate*10)
         const minLag = Math.floor(fsEstimate * 1.0);
         const maxLag = Math.min(length-1, Math.floor(fsEstimate * 10.0));
-        if (minLag >= maxLag) return 4000; // не хватает данных
+        if (minLag >= maxLag) return 4000;
 
-        // Вычисляем среднее
         let sum = 0;
         for (let i=0; i<length; i++) sum += buf[i];
         const mean = sum / length;
 
-        // Автокорреляция
-        let bestLag = minLag;
-        let bestCorr = -Infinity;
+        let bestLag = minLag, bestCorr = -Infinity;
         for (let lag = minLag; lag <= maxLag; lag++) {
           let corr = 0;
           for (let i=0; i<length-lag; i++) {
@@ -168,53 +157,41 @@
             bestLag = lag;
           }
         }
-        return bestLag / fsEstimate * 1000; // период в мс
+        return bestLag / fsEstimate * 1000; // в мс
       }
 
-      // Обработка нового отсчёта
-      function processMotion(az, ts) {
-        if (!isFinite(az)) return;
-        // Защита от выбросов
-        if (prevRaw !== null && Math.abs(az - prevRaw) > MAX_DELTA) {
-          prevRaw = az;
-          prevRawTime = ts;
-          return;
-        }
-        prevRaw = az;
-        const dtMs = prevRawTime ? ts - prevRawTime : 20;
-        prevRawTime = ts;
+      // Обработка нового значения гироскопа
+      function processMotion(gz, ts) {
+        if (!isFinite(gz)) return;
 
-        // Усиленный сигнал
-        const amplified = az * signalGain;
+        // Усиление
+        const amplified = gz * signalGain;
 
-        // Кладём в буфер для автокорреляции
+        // Добавляем в сырой буфер
         rawBuffer[rawBufIdx % RAW_BUF_LEN] = amplified;
         rawBufIdx++;
         if (rawBufIdx >= RAW_BUF_LEN && !rawBufFull) rawBufFull = true;
 
-        // Фильтрованный сигнал для графика дыхания
+        // Для графика дыхания – фильтруем
+        const dtMs = prevRawTime ? Math.max(1, ts - prevRawTime) : 20;
+        prevRawTime = ts;
         const filtered = bandpass.process(amplified, dtMs);
         breathGraph[graphIdx % BREATH_HIST] = filtered;
         graphIdx++;
         if (graphIdx >= BREATH_HIST && !graphFull) graphFull = true;
 
-        // Периодически (каждые 500 мс) оцениваем период, если буфер заполнен
-        if (rawBufFull && (rawBufIdx % Math.floor(RAW_BUF_LEN/10) === 0)) {
-          // Формируем упорядоченную копию буфера (от старого к новому)
+        // Периодически оцениваем период (каждые 10 новых отсчётов)
+        if (rawBufFull && rawBufIdx % 10 === 0) {
           const ordered = new Float32Array(RAW_BUF_LEN);
           const start = rawBufIdx % RAW_BUF_LEN;
           for (let i=0; i<RAW_BUF_LEN; i++) {
             ordered[i] = rawBuffer[(start + i) % RAW_BUF_LEN];
           }
-          // Оцениваем частоту дискретизации: средний интервал между отсчётами
-          // Используем длину буфера и предположительное время заполнения
-          // Но проще: фиксированная частота 50 Гц (примерно)
-          const fs = 50;
+          const fs = 50; // приблизительная частота событий
           const periodMs = computePeriodFromBuffer(ordered, RAW_BUF_LEN, fs);
           if (periodMs >= 1000 && periodMs <= 10000) {
             periodEstimates.push(periodMs);
             if (periodEstimates.length > MAX_PERIODS) periodEstimates.shift();
-            // Сглаживаем оценку
             if (periodEstimates.length >= 2) {
               currentPeriodMs = periodEstimates.reduce((a,b)=>a+b,0) / periodEstimates.length;
             } else {
@@ -225,9 +202,11 @@
       }
 
       function onDeviceMotion(e) {
-        const a = e.accelerationIncludingGravity;
-        if (!a) return;
-        processMotion(a.z ?? 0, performance.now());
+        // Берём ось Z гироскопа
+        const r = e.rotationRate;
+        if (!r) return;
+        const gz = typeof r.z === 'number' ? r.z : 0;
+        processMotion(gz, performance.now());
       }
 
       // Стабильность по вариабельности оценок периода
@@ -239,7 +218,6 @@
         return Math.max(0, 1 - cv/0.15);
       }
 
-      // Запуск/остановка
       async function startSensors() {
         if (sensorActive) return;
         if (typeof DeviceMotionEvent === 'undefined') { alert('Датчики не поддерживаются'); return; }
@@ -259,18 +237,17 @@
         window.removeEventListener('devicemotion', onDeviceMotion);
         sensorActive = false;
         startBtn.textContent = 'СТАРТ';
-        // Сброс
         rawBufIdx = 0; rawBufFull = false; rawBuffer.fill(0);
         periodEstimates = []; currentPeriodMs = 4000;
         bandpass.reset();
         graphIdx = 0; graphFull = false; breathGraph.fill(0);
-        prevRaw = null; prevRawTime = 0;
+        prevRawTime = 0;
         targetStability = 0;
       }
 
       startBtn.addEventListener('click', ()=> sensorActive ? stopSensors() : startSensors());
 
-      // --- Отрисовка ---
+      // Отрисовка
       function draw(ts) {
         if (!lastFrameTs) lastFrameTs = ts;
         const dt = Math.min(50, ts - lastFrameTs);
@@ -280,7 +257,6 @@
         const w = window.innerWidth, h = window.innerHeight;
         ctx.clearRect(0,0,w,h);
 
-        // Стабильность
         const rawStab = computeStability();
         targetStability = rawStab;
         const alphaSmooth = 1 - Math.exp(-dt/600);
@@ -289,7 +265,6 @@
         stabilityText.textContent = `СТАБИЛЬНОСТЬ ${stabPercent}%`;
         stabilityFill.style.width = `${stabPercent}%`;
 
-        // Анимация дыхания на основе текущего периода
         const periodAnim = currentPeriodMs || 4000;
         breathPhase += (2*Math.PI) * (dt/periodAnim);
         breathPhase %= (2*Math.PI);
@@ -299,7 +274,6 @@
 
         const cx = w*0.5, cy = h*0.38;
 
-        // Точки
         for (let i=0; i<points.length; i++) {
           const p = points[i];
           const ring = RINGS[p.ring];
@@ -325,7 +299,7 @@
         }
         ctx.shadowBlur = 0;
 
-        // График
+        // График дыхания
         const gy = h*0.82, gh = 60, gx=20, gw=w-40;
         ctx.fillStyle='rgba(0,0,0,0.3)';
         ctx.fillRect(gx-5,gy-gh/2-5,gw+10,gh+10);
@@ -348,7 +322,6 @@
           ctx.stroke();
         }
 
-        // Отладка
         const periodSec = currentPeriodMs ? (currentPeriodMs/1000).toFixed(1) : '--';
         debugEl.textContent = `Период: ${periodSec}с | Стаб: ${stabPercent}% | Gain: ${signalGain.toFixed(1)}`;
 
