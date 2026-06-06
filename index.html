@@ -1,11 +1,15 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Когерентное дыхание — IMU Biofeedback</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Ровное дыхание — IMU Biofeedback</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
     html, body {
       width: 100%;
       height: 100%;
@@ -31,7 +35,7 @@
       z-index: 10;
       pointer-events: none;
     }
-    .coherence-bar {
+    .stability-bar {
       width: 80%;
       max-width: 300px;
       height: 8px;
@@ -40,14 +44,14 @@
       overflow: hidden;
       margin-top: 5px;
     }
-    .coherence-fill {
+    .stability-fill {
       height: 100%;
       width: 0%;
       background: linear-gradient(90deg, #ff4d4d, #ffdd57, #4caf50);
       border-radius: 4px;
       transition: width 0.2s ease;
     }
-    #coherence-text {
+    #stability-text {
       font-size: 16px;
       letter-spacing: 2px;
       color: rgba(255,255,255,0.8);
@@ -78,10 +82,12 @@
 <body>
   <canvas id="canvas"></canvas>
   <div id="ui">
-    <div id="coherence-text">КОГЕРЕНТНОСТЬ 0%</div>
-    <div class="coherence-bar"><div id="coherence-fill" class="coherence-fill"></div></div>
+    <div id="stability-text">СТАБИЛЬНОСТЬ 0%</div>
+    <div class="stability-bar">
+      <div id="stability-fill" class="stability-fill"></div>
+    </div>
     <button id="start-btn">СТАРТ</button>
-    <div class="info">Положите телефон на грудь экраном вверх и дышите ровно, без лишних движений</div>
+    <div class="info">Положите телефон на грудь экраном вверх и дышите медленно (5-6 вдохов/мин)</div>
   </div>
 
   <script>
@@ -90,8 +96,8 @@
       const canvas = document.getElementById('canvas');
       const ctx = canvas.getContext('2d', { alpha: true });
       const startBtn = document.getElementById('start-btn');
-      const coherenceText = document.getElementById('coherence-text');
-      const coherenceFill = document.getElementById('coherence-fill');
+      const stabilityText = document.getElementById('stability-text');
+      const stabilityFill = document.getElementById('stability-fill');
 
       // -------------------- Визуальные параметры --------------------
       const RINGS = [
@@ -105,16 +111,22 @@
       let chaosOffsets = [];
 
       // -------------------- Состояние анимации --------------------
-      let targetCoherence = 0;
-      let currentCoherence = 0;
-      let breathPhase = 0;
-      let simTime = 0;
+      let targetStability = 0;      // целевая ровность дыхания (0..1)
+      let currentStability = 0;     // сглаженная
+      let breathPhase = 0;          // фаза для анимации колец
+      let simTime = 0;              // накопленное время для вращения (мс)
       let lastFrameTs = 0;
 
-      // -------------------- Обработка IMU --------------------
+      // -------------------- График дыхания --------------------
+      const BREATH_HISTORY_LENGTH = 400; // точек на графике
+      let breathGraph = new Float32Array(BREATH_HISTORY_LENGTH);
+      let breathGraphIndex = 0;
+      let breathGraphFilled = false;
+
+      // -------------------- Обработка сигнала (ось Z) --------------------
       let sensorActive = false;
 
-      // Временные ряды дыхательного сигнала
+      // Фильтры
       let baselineFast = 0;
       let baselineSlow = 0;
       let signalInitialized = false;
@@ -130,13 +142,17 @@
       const BREATH_HISTORY_MAX = 12;
       let lastPeakTime = 0;
 
-      // Для динамического порога
+      // Порог амплитуды (адаптивный)
       let noiseEma = 0;
 
-      // Параметры фильтров в секундах
+      // Параметры фильтров (в секундах)
       const FAST_TAU = 0.22;
       const SLOW_TAU = 1.8;
       const NOISE_TAU = 2.5;
+
+      // Защита от выбросов
+      const MAX_DELTA = 1.5; // максимально допустимое изменение между отсчетами
+      let previousRaw = null;
 
       function clamp(v, min, max) {
         return Math.max(min, Math.min(max, v));
@@ -155,7 +171,6 @@
       function initPoints() {
         points = [];
         chaosOffsets = [];
-
         const width = window.innerWidth;
         const height = window.innerHeight;
 
@@ -169,7 +184,6 @@
               driftY: (Math.random() - 0.5) * 0.5,
               phase: Math.random() * Math.PI * 2
             });
-
             points.push({
               ringIndex: r,
               indexInRing: i,
@@ -189,12 +203,9 @@
         const dpr = window.devicePixelRatio || 1;
         const width = window.innerWidth;
         const height = window.innerHeight;
-
         canvas.width = Math.round(width * dpr);
         canvas.height = Math.round(height * dpr);
-
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
         if (chaosOffsets.length > 0) {
           for (let i = 0; i < chaosOffsets.length; i++) {
             chaosOffsets[i].baseX = Math.random() * width;
@@ -202,11 +213,24 @@
           }
         }
       }
-
       window.addEventListener('resize', resize);
 
-      // -------------------- Анализ motion --------------------
+      // -------------------- Обработка сигнала --------------------
       function processMotionSample(rawValue, nowTs) {
+        if (!isFinite(rawValue)) return;
+
+        // Защита от выбросов
+        if (previousRaw !== null) {
+          const delta = rawValue - previousRaw;
+          if (Math.abs(delta) > MAX_DELTA) {
+            // Пропускаем выброс, но обновляем previousRaw, чтобы не потерять контекст
+            previousRaw = rawValue;
+            return;
+          }
+        }
+        previousRaw = rawValue;
+
+        // Инициализация фильтров
         if (!signalInitialized) {
           baselineFast = rawValue;
           baselineSlow = rawValue;
@@ -228,17 +252,20 @@
 
         const bandPassed = baselineFast - baselineSlow;
 
-        // Динамический шумовой уровень, чтобы порог не был фиксированным
+        // Обновление уровня шума (для адаптивного порога)
         noiseEma += aNoise * (Math.abs(bandPassed) - noiseEma);
-        const threshold = Math.max(0.01, noiseEma * 1.25);
+        const threshold = Math.max(0.02, noiseEma * 1.25);
 
-        // Детектор локального максимума:
-        // prevSignal2 -> prevSignal1 -> current
-        // Если prevSignal1 выше соседей и выше порога, фиксируем пик
+        // Сохраняем в график дыхания
+        breathGraph[breathGraphIndex % BREATH_HISTORY_LENGTH] = bandPassed;
+        breathGraphIndex++;
+        if (breathGraphIndex >= BREATH_HISTORY_LENGTH && !breathGraphFilled) breathGraphFilled = true;
+
+        // Детектор локального максимума
         const peakCandidate = prevSignal1;
         const peakTimeCandidate = prevTime1;
-        const minPeriodMs = 1000;   // 60 вдохов/мин
-        const maxPeriodMs = 10000;  // 6 вдохов/мин
+        const minPeriodMs = 1200;  // ~50 вдохов/мин
+        const maxPeriodMs = 10000; // ~6 вдохов/мин
 
         if (
           peakCandidate > threshold &&
@@ -257,15 +284,13 @@
               const variance = breathPeriods.reduce((sum, p) => sum + (p - mean) * (p - mean), 0) / breathPeriods.length;
               const stdDev = Math.sqrt(variance);
               const cv = stdDev / mean;
-
-              // Чем меньше вариабельность периода, тем выше "когерентность"
-              const coherence = Math.exp(-5 * cv);
-              targetCoherence = clamp(coherence, 0, 1);
+              // Чем меньше вариабельность периода, тем выше стабильность
+              const stability = Math.exp(-6 * cv);
+              targetStability = clamp(stability, 0, 1);
             } else {
-              targetCoherence = 0;
+              targetStability = 0;
             }
           }
-
           lastPeakTime = peakTimeCandidate;
         }
 
@@ -278,28 +303,18 @@
       function onDeviceMotion(event) {
         const a = event.accelerationIncludingGravity;
         if (!a) return;
-
-        const ax = typeof a.x === 'number' ? a.x : 0;
-        const ay = typeof a.y === 'number' ? a.y : 0;
         const az = typeof a.z === 'number' ? a.z : 0;
-
-        // Сигнал по модулю — менее зависим от ориентации, чем одна ось
-        // Для устройства на груди это обычно стабильнее, чем жёсткая привязка к z.
-        const raw = Math.sqrt(ax * ax + ay * ay + az * az);
-
         const now = performance.now();
-        processMotionSample(raw, now);
+        processMotionSample(az, now);
       }
 
-      // -------------------- Запуск / остановка датчиков --------------------
+      // -------------------- Запуск / остановка --------------------
       async function startSensors() {
         if (sensorActive) return;
-
         if (typeof DeviceMotionEvent === 'undefined') {
           alert('Ваше устройство не поддерживает датчики движения');
           return;
         }
-
         try {
           if (typeof DeviceMotionEvent.requestPermission === 'function') {
             const permissionState = await DeviceMotionEvent.requestPermission();
@@ -308,7 +323,6 @@
               return;
             }
           }
-
           window.addEventListener('devicemotion', onDeviceMotion, { passive: true });
           sensorActive = true;
           startBtn.textContent = 'ПАУЗА';
@@ -320,12 +334,10 @@
 
       function stopSensors() {
         if (!sensorActive) return;
-
         window.removeEventListener('devicemotion', onDeviceMotion);
         sensorActive = false;
         startBtn.textContent = 'СТАРТ';
-
-        // Сброс состояния анализа
+        // Полный сброс состояния
         baselineFast = 0;
         baselineSlow = 0;
         signalInitialized = false;
@@ -336,7 +348,11 @@
         breathPeriods = [];
         lastPeakTime = 0;
         noiseEma = 0;
-        targetCoherence = 0;
+        targetStability = 0;
+        previousRaw = null;
+        breathGraphIndex = 0;
+        breathGraphFilled = false;
+        breathGraph.fill(0);
       }
 
       startBtn.addEventListener('click', () => {
@@ -344,7 +360,7 @@
         else startSensors();
       });
 
-      // -------------------- Рендер --------------------
+      // -------------------- Отрисовка --------------------
       function draw(ts) {
         if (!lastFrameTs) lastFrameTs = ts;
         const dt = Math.min(50, ts - lastFrameTs);
@@ -358,25 +374,27 @@
         const centerX = width * 0.5;
         const centerY = height * 0.43;
 
-        // Плавное приближение UI к целевой когерентности
-        currentCoherence += (targetCoherence - currentCoherence) * 0.05;
-        const coherencePercent = Math.round(currentCoherence * 100);
-        coherenceText.textContent = `КОГЕРЕНТНОСТЬ ${coherencePercent}%`;
-        coherenceFill.style.width = `${coherencePercent}%`;
+        // FPS-независимое сглаживание стабильности (постоянная времени 500 мс)
+        const smoothingAlpha = 1 - Math.exp(-dt / 500);
+        currentStability += (targetStability - currentStability) * smoothingAlpha;
+        const stabilityPercent = Math.round(currentStability * 100);
+        stabilityText.textContent = `СТАБИЛЬНОСТЬ ${stabilityPercent}%`;
+        stabilityFill.style.width = `${stabilityPercent}%`;
 
-        // Фаза дыхания — визуальная, по оценке периода
+        // Оценка периода дыхания для анимации колец
         const estimatedPeriod = breathPeriods.length >= 1
           ? breathPeriods.reduce((a, b) => a + b, 0) / breathPeriods.length
           : 4000;
-
         breathPhase += (2 * Math.PI) * (dt / estimatedPeriod);
         breathPhase %= (Math.PI * 2);
 
         const breath = (Math.sin(breathPhase) + 1) * 0.5;
         const easedBreath = smoothstep(breath);
 
-        const rotationFactor = currentCoherence;
+        // Вращение
+        const rotationFactor = currentStability;
 
+        // ---- Рисуем облако / кольца ----
         for (let i = 0; i < points.length; i++) {
           const p = points[i];
           const ring = RINGS[p.ringIndex];
@@ -389,18 +407,17 @@
 
           const driftX = Math.sin(simTime * 0.0005 + chaos.phase) * 20 * chaos.driftX;
           const driftY = Math.cos(simTime * 0.0007 + chaos.phase) * 20 * chaos.driftY;
-
           const chaoticX = clamp(chaos.baseX + driftX, 0, width);
           const chaoticY = clamp(chaos.baseY + driftY, 0, height);
 
-          const x = chaoticX + (idealX - chaoticX) * currentCoherence;
-          const y = chaoticY + (idealY - chaoticY) * currentCoherence;
+          const x = chaoticX + (idealX - chaoticX) * currentStability;
+          const y = chaoticY + (idealY - chaoticY) * currentStability;
 
           const idealSize = p.dotSizeMin + (p.dotSizeMax - p.dotSizeMin) * easedBreath;
           const chaoticSize = p.sizeJitter;
-          const dotSize = chaoticSize + (idealSize - chaoticSize) * currentCoherence;
-          const alpha = 0.3 + 0.7 * currentCoherence;
-          const glow = dotSize * 2 * currentCoherence;
+          const dotSize = chaoticSize + (idealSize - chaoticSize) * currentStability;
+          const alpha = 0.3 + 0.7 * currentStability;
+          const glow = dotSize * 2 * currentStability;
 
           ctx.beginPath();
           ctx.arc(x, y, dotSize, 0, Math.PI * 2);
@@ -409,8 +426,50 @@
           ctx.shadowBlur = glow;
           ctx.fill();
         }
-
         ctx.shadowBlur = 0;
+
+        // ---- График дыхания ----
+        const graphY = height * 0.82;
+        const graphHeight = 60;
+        const graphWidth = width - 40;
+        const graphLeft = 20;
+        const graphCenterY = graphY;
+
+        // Полупрозрачный фон
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(graphLeft - 5, graphY - graphHeight/2 - 5, graphWidth + 10, graphHeight + 10);
+
+        // Центральная линия
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(graphLeft, graphCenterY);
+        ctx.lineTo(graphLeft + graphWidth, graphCenterY);
+        ctx.stroke();
+
+        // График сигнала
+        const count = breathGraphFilled ? BREATH_HISTORY_LENGTH : breathGraphIndex;
+        if (count > 1) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          const startIdx = breathGraphFilled ? breathGraphIndex : 0;
+          const step = Math.max(1, Math.floor(count / graphWidth));
+          for (let i = 0; i < count - 1; i += step) {
+            const idx1 = (startIdx + i) % BREATH_HISTORY_LENGTH;
+            const idx2 = (startIdx + i + step) % BREATH_HISTORY_LENGTH;
+            const v1 = breathGraph[idx1];
+            const v2 = breathGraph[idx2];
+            const x1 = graphLeft + (i / (count - 1)) * graphWidth;
+            const x2 = graphLeft + ((i + step) / (count - 1)) * graphWidth;
+            const y1 = graphCenterY - v1 * 15; // масштаб
+            const y2 = graphCenterY - v2 * 15;
+            if (i === 0) ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+          }
+          ctx.stroke();
+        }
+
         requestAnimationFrame(draw);
       }
 
