@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Breath Signal Core</title>
+<style>
+body{margin:0;background:#0b0f14;color:#e6edf3;font-family:system-ui}
+canvas{display:block;width:100vw;height:70vh}
+#ui{padding:10px;font-size:14px}
+button{margin-right:8px;padding:8px 12px}
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+<div id="ui">
+<button id="start">Start</button>
+<div id="info">waiting...</div>
+</div>
+
+<script>
+(() => {
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+const N = 400;
+let raw = new Array(N).fill(0);
+let filt = new Array(N).fill(0);
+let idx = 0;
+
+let running = false;
+
+// signal
+let lastT = 0;
+let ema1 = 0, ema2 = 0;
+
+// bandpass params (0.05–0.5 Hz approx tuned later dynamically)
+let lp1 = 0, lp2 = 0;
+
+// peaks
+let lastSign = 0;
+let lastPeak = 0;
+let periods = [];
+
+let sourceMode = "gyro"; // gyro | accel
+
+function push(arr,v){
+  arr[idx % N] = v;
+}
+
+// simple adaptive high/low pass
+function process(x, dt){
+  const a1 = 0.05;
+  const a2 = 0.01;
+
+  ema1 += a1 * (x - ema1);
+  ema2 += a2 * (ema1 - ema2);
+
+  return ema1 - ema2;
+}
+
+function onMotion(e){
+  if(!running) return;
+
+  const t = performance.now();
+  const dt = lastT ? (t - lastT) : 16;
+  lastT = t;
+
+  let v = 0;
+
+  const r = e.rotationRate;
+  const a = e.accelerationIncludingGravity;
+
+  if(r && r.z != null && Math.abs(r.z) > 0.0001){
+    sourceMode = "gyro";
+    v = r.z;
+  } else if(a){
+    sourceMode = "accel";
+    v = a.z;
+  }
+
+  const amplified = v * 20;
+
+  const y = process(amplified, dt);
+
+  raw[idx % N] = amplified;
+  filt[idx % N] = y;
+
+  idx++;
+
+  // peak detect
+  const sign = y > 0 ? 1 : -1;
+
+  if(sign === 1 && lastSign === -1){
+    const now = performance.now();
+    if(lastPeak){
+      const p = now - lastPeak;
+      if(p > 800 && p < 12000){
+        periods.push(p);
+        if(periods.length > 10) periods.shift();
+      }
+    }
+    lastPeak = now;
+  }
+
+  lastSign = sign;
+}
+
+function stability(){
+  if(periods.length < 3) return 0;
+
+  const m = periods.reduce((a,b)=>a+b,0)/periods.length;
+  const v = periods.reduce((a,b)=>a+(b-m)**2,0)/periods.length;
+  const cv = Math.sqrt(v)/m;
+
+  return Math.max(0, 1 - cv/0.2);
+}
+
+function draw(){
+  const w = canvas.width = innerWidth;
+  const h = canvas.height = innerHeight * 0.7;
+
+  ctx.clearRect(0,0,w,h);
+
+  const mid = h/2;
+
+  // raw
+  ctx.strokeStyle = "#ff5555";
+  ctx.beginPath();
+  for(let i=0;i<N;i++){
+    const x = i/N*w;
+    const y = mid - raw[(idx+i)%N];
+    ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+
+  // filtered
+  ctx.strokeStyle = "#55ff88";
+  ctx.beginPath();
+  for(let i=0;i<N;i++){
+    const x = i/N*w;
+    const y = mid - filt[(idx+i)%N]*30;
+    ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+
+  const stab = stability();
+
+  document.getElementById("info").textContent =
+    `source: ${sourceMode} | stability: ${(stab*100).toFixed(0)}% | periods: ${periods.length}`;
+
+  requestAnimationFrame(draw);
+}
+
+async function start(){
+  if(typeof DeviceMotionEvent?.requestPermission === "function"){
+    const p = await DeviceMotionEvent.requestPermission();
+    if(p !== "granted") return;
+  }
+
+  window.addEventListener("devicemotion", onMotion);
+  running = true;
+}
+
+document.getElementById("start").onclick = start;
+
+draw();
+
+})();
+</script>
+
+</body>
+</html>
