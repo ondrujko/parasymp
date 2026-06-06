@@ -111,19 +111,20 @@
       let chaosOffsets = [];
 
       // -------------------- Состояние анимации --------------------
-      let targetStability = 0;      // целевая ровность дыхания (0..1)
-      let currentStability = 0;     // сглаженная
-      let breathPhase = 0;          // фаза для анимации колец
-      let simTime = 0;              // накопленное время для вращения (мс)
+      let targetStability = 0;
+      let currentStability = 0;
+      let breathPhase = 0;
+      let simTime = 0;
       let lastFrameTs = 0;
+      let animationId = null;
 
       // -------------------- График дыхания --------------------
-      const BREATH_HISTORY_LENGTH = 400; // точек на графике
+      const BREATH_HISTORY_LENGTH = 400;
       let breathGraph = new Float32Array(BREATH_HISTORY_LENGTH);
       let breathGraphIndex = 0;
       let breathGraphFilled = false;
 
-      // -------------------- Обработка сигнала (ось Z) --------------------
+      // -------------------- Обработка сигнала --------------------
       let sensorActive = false;
 
       // Фильтры
@@ -131,28 +132,31 @@
       let baselineSlow = 0;
       let signalInitialized = false;
 
-      // Для детектора локального максимума
+      // Детектор пиков
       let prevSignal2 = 0;
       let prevSignal1 = 0;
       let prevTime1 = 0;
       let prevTime2 = 0;
 
-      // История периодов дыхания
+      // История периодов
       let breathPeriods = [];
       const BREATH_HISTORY_MAX = 12;
       let lastPeakTime = 0;
 
-      // Порог амплитуды (адаптивный)
+      // Порог
       let noiseEma = 0;
 
-      // Параметры фильтров (в секундах)
+      // Защита от выбросов
+      const MAX_DELTA = 1.5;
+      let previousRaw = null;
+
+      // Усиление сигнала (можно менять, если дыхание плохо детектируется)
+      const SIGNAL_GAIN = 12.0; // увеличь, если амплитуда на груди слишком мала
+
+      // Параметры фильтров
       const FAST_TAU = 0.22;
       const SLOW_TAU = 1.8;
       const NOISE_TAU = 2.5;
-
-      // Защита от выбросов
-      const MAX_DELTA = 1.5; // максимально допустимое изменение между отсчетами
-      let previousRaw = null;
 
       function clamp(v, min, max) {
         return Math.max(min, Math.min(max, v));
@@ -219,18 +223,19 @@
       function processMotionSample(rawValue, nowTs) {
         if (!isFinite(rawValue)) return;
 
+        // Усиление сигнала
+        rawValue *= SIGNAL_GAIN;
+
         // Защита от выбросов
         if (previousRaw !== null) {
           const delta = rawValue - previousRaw;
           if (Math.abs(delta) > MAX_DELTA) {
-            // Пропускаем выброс, но обновляем previousRaw, чтобы не потерять контекст
             previousRaw = rawValue;
             return;
           }
         }
         previousRaw = rawValue;
 
-        // Инициализация фильтров
         if (!signalInitialized) {
           baselineFast = rawValue;
           baselineSlow = rawValue;
@@ -252,20 +257,21 @@
 
         const bandPassed = baselineFast - baselineSlow;
 
-        // Обновление уровня шума (для адаптивного порога)
         noiseEma += aNoise * (Math.abs(bandPassed) - noiseEma);
         const threshold = Math.max(0.02, noiseEma * 1.25);
 
-        // Сохраняем в график дыхания
+        // Сохраняем в график
         breathGraph[breathGraphIndex % BREATH_HISTORY_LENGTH] = bandPassed;
         breathGraphIndex++;
-        if (breathGraphIndex >= BREATH_HISTORY_LENGTH && !breathGraphFilled) breathGraphFilled = true;
+        if (breathGraphIndex >= BREATH_HISTORY_LENGTH && !breathGraphFilled) {
+          breathGraphFilled = true;
+        }
 
         // Детектор локального максимума
         const peakCandidate = prevSignal1;
         const peakTimeCandidate = prevTime1;
-        const minPeriodMs = 1200;  // ~50 вдохов/мин
-        const maxPeriodMs = 10000; // ~6 вдохов/мин
+        const minPeriodMs = 1200;
+        const maxPeriodMs = 10000;
 
         if (
           peakCandidate > threshold &&
@@ -284,7 +290,6 @@
               const variance = breathPeriods.reduce((sum, p) => sum + (p - mean) * (p - mean), 0) / breathPeriods.length;
               const stdDev = Math.sqrt(variance);
               const cv = stdDev / mean;
-              // Чем меньше вариабельность периода, тем выше стабильность
               const stability = Math.exp(-6 * cv);
               targetStability = clamp(stability, 0, 1);
             } else {
@@ -337,7 +342,8 @@
         window.removeEventListener('devicemotion', onDeviceMotion);
         sensorActive = false;
         startBtn.textContent = 'СТАРТ';
-        // Полный сброс состояния
+
+        // Полный сброс
         baselineFast = 0;
         baselineSlow = 0;
         signalInitialized = false;
@@ -372,16 +378,16 @@
         ctx.clearRect(0, 0, width, height);
 
         const centerX = width * 0.5;
-        const centerY = height * 0.43;
+        const centerY = height * 0.38;
 
-        // FPS-независимое сглаживание стабильности (постоянная времени 500 мс)
+        // Сглаживание стабильности с учётом dt (постоянная времени 500 мс)
         const smoothingAlpha = 1 - Math.exp(-dt / 500);
         currentStability += (targetStability - currentStability) * smoothingAlpha;
         const stabilityPercent = Math.round(currentStability * 100);
         stabilityText.textContent = `СТАБИЛЬНОСТЬ ${stabilityPercent}%`;
         stabilityFill.style.width = `${stabilityPercent}%`;
 
-        // Оценка периода дыхания для анимации колец
+        // Оценка периода для анимации дыхания
         const estimatedPeriod = breathPeriods.length >= 1
           ? breathPeriods.reduce((a, b) => a + b, 0) / breathPeriods.length
           : 4000;
@@ -390,11 +396,9 @@
 
         const breath = (Math.sin(breathPhase) + 1) * 0.5;
         const easedBreath = smoothstep(breath);
-
-        // Вращение
         const rotationFactor = currentStability;
 
-        // ---- Рисуем облако / кольца ----
+        // ---- Облако / кольца ----
         for (let i = 0; i < points.length; i++) {
           const p = points[i];
           const ring = RINGS[p.ringIndex];
@@ -435,11 +439,9 @@
         const graphLeft = 20;
         const graphCenterY = graphY;
 
-        // Полупрозрачный фон
         ctx.fillStyle = 'rgba(0,0,0,0.3)';
         ctx.fillRect(graphLeft - 5, graphY - graphHeight/2 - 5, graphWidth + 10, graphHeight + 10);
 
-        // Центральная линия
         ctx.strokeStyle = 'rgba(255,255,255,0.2)';
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -447,7 +449,6 @@
         ctx.lineTo(graphLeft + graphWidth, graphCenterY);
         ctx.stroke();
 
-        // График сигнала
         const count = breathGraphFilled ? BREATH_HISTORY_LENGTH : breathGraphIndex;
         if (count > 1) {
           ctx.strokeStyle = 'rgba(255,255,255,0.8)';
@@ -462,7 +463,7 @@
             const v2 = breathGraph[idx2];
             const x1 = graphLeft + (i / (count - 1)) * graphWidth;
             const x2 = graphLeft + ((i + step) / (count - 1)) * graphWidth;
-            const y1 = graphCenterY - v1 * 15; // масштаб
+            const y1 = graphCenterY - v1 * 15;
             const y2 = graphCenterY - v2 * 15;
             if (i === 0) ctx.moveTo(x1, y1);
             ctx.lineTo(x2, y2);
@@ -470,7 +471,14 @@
           ctx.stroke();
         }
 
-        requestAnimationFrame(draw);
+        // ---- Отладка: сырое значение z (для диагностики) ----
+        ctx.font = '14px monospace';
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        const rawZ = previousRaw !== null ? (previousRaw / SIGNAL_GAIN).toFixed(3) : '--';
+        ctx.fillText(`Z raw: ${rawZ}`, 20, 40);
+        ctx.fillText(`Gain: x${SIGNAL_GAIN}`, 20, 60);
+
+        animationId = requestAnimationFrame(draw);
       }
 
       // -------------------- Инициализация --------------------
@@ -478,7 +486,8 @@
         resize();
         initPoints();
         startBtn.textContent = 'СТАРТ';
-        requestAnimationFrame(draw);
+        // Запускаем анимацию единожды
+        animationId = requestAnimationFrame(draw);
       }
 
       init();
