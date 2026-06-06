@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-<title>IMU Signal Monitor — 10s Window</title>
+<title>IMU Signal Monitor</title>
 
 <style>
 :root{
@@ -34,7 +34,6 @@ body{
 .header{
   display:flex;
   justify-content:space-between;
-  align-items:center;
   margin-bottom:10px;
 }
 
@@ -55,8 +54,6 @@ button{
   margin-top:10px;
 }
 
-/* ---------- LEGEND ---------- */
-
 .legend{
   display:flex;
   gap:14px;
@@ -65,17 +62,9 @@ button{
   margin-bottom:8px;
 }
 
-.item{
-  display:flex;
-  align-items:center;
-  gap:6px;
-}
+.item{display:flex;align-items:center;gap:6px}
 
-.dot{
-  width:10px;
-  height:10px;
-  border-radius:50%;
-}
+.dot{width:10px;height:10px;border-radius:50%}
 
 .x{background:var(--x)}
 .y{background:var(--y)}
@@ -102,9 +91,9 @@ canvas{
 
   <div class="panel">
     <div class="legend">
-      <div class="item"><span class="dot x"></span>X (roll / accel X)</div>
-      <div class="item"><span class="dot y"></span>Y (pitch / accel Y)</div>
-      <div class="item"><span class="dot z"></span>Z (yaw / accel Z)</div>
+      <div class="item"><span class="dot x"></span>X</div>
+      <div class="item"><span class="dot y"></span>Y</div>
+      <div class="item"><span class="dot z"></span>Z</div>
     </div>
     <canvas id="accel"></canvas>
   </div>
@@ -120,9 +109,7 @@ canvas{
 
   <div class="panel">
     <div class="legend">
-      <div class="item"><span class="dot x"></span>X</div>
-      <div class="item"><span class="dot y"></span>Y</div>
-      <div class="item"><span class="dot z"></span>Z</div>
+      <div class="item"><span class="dot x"></span>Magnitude</div>
     </div>
     <canvas id="acc_mag"></canvas>
   </div>
@@ -136,7 +123,6 @@ const WINDOW = 10000;
 
 const accel = [];
 const gyro = [];
-
 const accMag = [];
 
 let running = false;
@@ -145,17 +131,22 @@ let demoStart = 0;
 
 const cA = document.getElementById("accel");
 const cG = document.getElementById("gyro");
-const cAM = document.getElementById("acc_mag");
+const cM = document.getElementById("acc_mag");
 
-const a = cA.getContext("2d");
-const g = cG.getContext("2d");
-
-const aM = cA.getContext("2d");
+const ctxA = cA.getContext("2d");
+const ctxG = cG.getContext("2d");
+const ctxM = cM.getContext("2d");
 
 function now(){ return performance.now(); }
 
-function push(arr,t,x,y,z){
+function pushVec(arr,t,x,y,z){
   arr.push({t,x,y,z});
+  const cut = t - WINDOW;
+  while(arr.length && arr[0].t < cut) arr.shift();
+}
+
+function pushScalar(arr,t,v){
+  arr.push({t,v});
   const cut = t - WINDOW;
   while(arr.length && arr[0].t < cut) arr.shift();
 }
@@ -170,12 +161,16 @@ function onMotion(e){
   const rot = e.rotationRate;
 
   if(acc){
-    push(accel,t,acc.x||0,acc.y||0,acc.z||0);
-    push(accMag,t, (acc.x**2+acc.y**2+acc.z**2)**0.5;
+    pushVec(accel,t,acc.x||0,acc.y||0,acc.z||0);
+
+    const mag =
+      Math.sqrt((acc.x||0)**2 + (acc.y||0)**2 + (acc.z||0)**2);
+
+    pushScalar(accMag,t,mag);
   }
 
   if(rot){
-    push(gyro,t,rot.beta||0,rot.gamma||0,rot.alpha||0);
+    pushVec(gyro,t,rot.beta||0,rot.gamma||0,rot.alpha||0);
   }
 }
 
@@ -185,22 +180,31 @@ function demoTick(){
   const t = now();
   const e = (t-demoStart)/1000;
 
-  push(accel,t,
+  pushVec(accel,t,
     Math.sin(e)*2,
     Math.cos(e*0.7)*2,
     9.8 + Math.sin(e*0.3)*1.2
   );
 
-  push(gyro,t,
+  pushVec(gyro,t,
     Math.sin(e*1.3)*40,
     Math.cos(e*1.1)*40,
     Math.sin(e*0.9)*30
   );
+
+  const mag =
+    Math.sqrt(
+      Math.sin(e)**2 +
+      Math.cos(e*0.7)**2 +
+      (9.8 + Math.sin(e*0.3))**2
+    );
+
+  pushScalar(accMag,t,mag);
 }
 
-/* ---------- DRAW ---------- */
+/* ---------- DRAW VECTOR ---------- */
 
-function draw(ctx, canvas, data){
+function drawVec(ctx, canvas, data){
   const w = canvas.width = canvas.clientWidth;
   const h = canvas.height = 220;
 
@@ -222,12 +226,12 @@ function draw(ctx, canvas, data){
   min -= pad; max += pad;
 
   const sx = w / WINDOW;
-  const sy = h / (max-min);
+  const sy = h / (max-min || 1);
 
   const colors = {
-    x: "#ff4d4d",
-    y: "#4dff88",
-    z: "#4da3ff"
+    x:"#ff4d4d",
+    y:"#4dff88",
+    z:"#4da3ff"
   };
 
   function plot(key,color){
@@ -245,17 +249,61 @@ function draw(ctx, canvas, data){
       if(!started){
         ctx.moveTo(x,y);
         started = true;
-      } else {
-        ctx.lineTo(x,y);
-      }
+      } else ctx.lineTo(x,y);
     }
 
     ctx.stroke();
   }
 
-  plot("x", colors.x);
-  plot("y", colors.y);
-  plot("z", colors.z);
+  plot("x",colors.x);
+  plot("y",colors.y);
+  plot("z",colors.z);
+}
+
+/* ---------- DRAW SCALAR ---------- */
+
+function drawScalar(ctx, canvas, data){
+  const w = canvas.width = canvas.clientWidth;
+  const h = canvas.height = 220;
+
+  ctx.clearRect(0,0,w,h);
+
+  if(data.length < 2) return;
+
+  const t = now();
+  const minT = t - WINDOW;
+
+  let min = Infinity, max = -Infinity;
+
+  for(const p of data){
+    min = Math.min(min,p.v);
+    max = Math.max(max,p.v);
+  }
+
+  const pad = (max-min)*0.2 || 1;
+  min -= pad; max += pad;
+
+  const sx = w / WINDOW;
+  const sy = h / (max-min || 1);
+
+  ctx.beginPath();
+  ctx.strokeStyle = "#ffffff";
+
+  let started = false;
+
+  for(const p of data){
+    if(p.t < minT) continue;
+
+    const x = (p.t - minT) * sx;
+    const y = h - (p.v - min) * sy;
+
+    if(!started){
+      ctx.moveTo(x,y);
+      started = true;
+    } else ctx.lineTo(x,y);
+  }
+
+  ctx.stroke();
 }
 
 /* ---------- LOOP ---------- */
@@ -263,10 +311,9 @@ function draw(ctx, canvas, data){
 function loop(){
   if(demo) demoTick();
 
-  draw(a,cA,accel);
-  draw(g,cG,gyro);
-
-  draw(aM,cAM,accMag);
+  drawVec(ctxA,cA,accel);
+  drawVec(ctxG,cG,gyro);
+  drawScalar(ctxM,cM,accMag);
 
   requestAnimationFrame(loop);
 }
@@ -279,6 +326,7 @@ document.getElementById("start").onclick = async () => {
   if(running){
     accel.length = 0;
     gyro.length = 0;
+    accMag.length = 0;
 
     try{
       if(DeviceMotionEvent?.requestPermission){
@@ -295,8 +343,10 @@ document.getElementById("start").onclick = async () => {
 document.getElementById("demo").onclick = () => {
   demo = !demo;
   demoStart = now();
+
   accel.length = 0;
   gyro.length = 0;
+  accMag.length = 0;
 };
 
 loop();
