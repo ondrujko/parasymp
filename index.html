@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Ровное дыхание — IMU Biofeedback (гироскоп Z, рабочий)</title>
+  <title>Диагностика: гироскоп Z vs дыхание</title>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
     html,body { width:100%; height:100%; overflow:hidden; background:#000; font-family:system-ui,sans-serif; }
@@ -21,7 +21,7 @@
 </head>
 <body>
   <canvas id="canvas"></canvas>
-  <div id="debug">Gyro Z: 0.000 | Период: --с | Стаб: 0%</div>
+  <div id="debug">Gyro Z (сырой): 0.000 | Период: --с | Стаб: 0%</div>
   <div id="ui">
     <div id="stability-text">СТАБИЛЬНОСТЬ 0%</div>
     <div class="stability-bar"><div id="stability-fill" class="stability-fill"></div></div>
@@ -30,12 +30,11 @@
       <button id="gain-down">Gain −</button>
       <button id="gain-up">Gain +</button>
     </div>
-    <div class="info">Телефон на груди экраном вверх. Дышите медленно. Если сигнал слабый — увеличивайте Gain</div>
+    <div class="info">Если СИНИЙ график плоский — гироскоп Z не даёт дыхания. Попробуйте другой датчик или ось.</div>
   </div>
 
   <script>
     (() => {
-      // DOM
       const canvas = document.getElementById('canvas');
       const ctx = canvas.getContext('2d', { alpha: true });
       const startBtn = document.getElementById('start-btn');
@@ -54,38 +53,31 @@
       ];
       let points = [], chaosOffsets = [];
 
-      // Анимация
       let targetStability = 0, currentStability = 0;
       let breathPhase = 0, simTime = 0, lastFrameTs = 0;
 
-      // График дыхания
-      const BREATH_HIST = 400;
-      let breathGraph = new Float32Array(BREATH_HIST);
+      // Буферы графиков (сырой и фильтрованный)
+      const HIST = 400;
+      let rawGraph = new Float32Array(HIST);
+      let filteredGraph = new Float32Array(HIST);
       let graphIdx = 0, graphFull = false;
 
-      // Сигнал
       let sensorActive = false;
-      let signalGain = 10.0;               // ★ начинаем с 10, т.к. гироскоп даёт малые значения
+      let signalGain = 20.0; // начнём с большого усиления для гироскопа
       let rawGyroZ = 0;
 
-      // Реальный dt и фильтр
+      // Фильтр дыхания (полосовой 0.08–0.5 Гц)
       class BiquadBandpass {
         constructor() {
-          // коэффициенты будут пересчитываться динамически
           this.x1 = this.x2 = this.y1 = this.y2 = 0;
-          this.fs = 50; // временно
           this.updateCoeffs(50, 0.25, 1.5);
         }
         updateCoeffs(fs, f0, Q) {
           const w0 = 2 * Math.PI * f0 / fs;
           const alpha = Math.sin(w0) / (2 * Q);
           const cosw0 = Math.cos(w0);
-          this.b0 = alpha;
-          this.b1 = 0;
-          this.b2 = -alpha;
-          this.a0 = 1 + alpha;
-          this.a1 = -2 * cosw0;
-          this.a2 = 1 - alpha;
+          this.b0 = alpha; this.b1 = 0; this.b2 = -alpha;
+          this.a0 = 1 + alpha; this.a1 = -2 * cosw0; this.a2 = 1 - alpha;
           this.b0 /= this.a0; this.b1 /= this.a0; this.b2 /= this.a0;
           this.a1 /= this.a0; this.a2 /= this.a0;
         }
@@ -100,7 +92,7 @@
       }
       const bandpass = new BiquadBandpass();
 
-      // Детектор переходов через ноль вверх
+      // Детектор пересечений нуля
       let zeroCrossUpTimes = [];
       let lastZeroCrossTime = 0;
       let prevSign = 0;
@@ -108,12 +100,10 @@
       const MAX_PERIOD = 10000;
       const MAX_CROSSES = 8;
       let currentPeriodMs = 4000;
-
       let prevTime = 0;
 
-      // Управление Gain
-      gainUpBtn.addEventListener('click', () => { signalGain = Math.min(50.0, signalGain + 2.0); });
-      gainDownBtn.addEventListener('click', () => { signalGain = Math.max(1.0, signalGain - 2.0); });
+      gainUpBtn.addEventListener('click', () => { signalGain = Math.min(100.0, signalGain + 5.0); });
+      gainDownBtn.addEventListener('click', () => { signalGain = Math.max(1.0, signalGain - 5.0); });
 
       function initPoints() {
         points = []; chaosOffsets = [];
@@ -156,29 +146,27 @@
         if (!isFinite(gz)) return;
         rawGyroZ = gz;
 
-        // Усиленный сигнал
         const amplified = gz * signalGain;
 
-        // Определяем реальный dt и обновляем частоту фильтра
+        // Динамическая частота дискретизации
         if (prevTime !== 0) {
           const dtMs = Math.max(1, ts - prevTime);
           const fs = 1000 / dtMs;
-          // плавно подстраиваем частоту среза фильтра под реальную частоту событий
           if (fs > 10 && fs < 200) {
             bandpass.updateCoeffs(fs, 0.25, 1.5);
           }
         }
         prevTime = ts;
 
-        // Фильтруем
         const filtered = bandpass.process(amplified);
 
-        // Сохраняем в график
-        breathGraph[graphIdx % BREATH_HIST] = filtered;
+        // Сохраняем оба сигнала для отрисовки
+        rawGraph[graphIdx % HIST] = amplified * 10; // усилим для видимости
+        filteredGraph[graphIdx % HIST] = filtered;
         graphIdx++;
-        if (graphIdx >= BREATH_HIST && !graphFull) graphFull = true;
+        if (graphIdx >= HIST && !graphFull) graphFull = true;
 
-        // Детектор пересечений нуля с гистерезисом
+        // Детектор нуля для стабильности
         const nowSign = filtered > 0.02 ? 1 : (filtered < -0.02 ? -1 : prevSign);
         if (nowSign === 1 && prevSign === -1) {
           const nowTs = ts;
@@ -193,7 +181,6 @@
         }
         prevSign = nowSign;
 
-        // Сглаженный период
         if (zeroCrossUpTimes.length >= 2) {
           const avg = zeroCrossUpTimes.reduce((a, b) => a + b, 0) / zeroCrossUpTimes.length;
           currentPeriodMs += (avg - currentPeriodMs) * 0.2;
@@ -203,7 +190,6 @@
       function onDeviceMotion(e) {
         const r = e.rotationRate;
         if (!r) return;
-        // ★ используем ось Z гироскопа
         processMotion(r.z ?? 0, performance.now());
       }
 
@@ -239,7 +225,8 @@
         lastZeroCrossTime = 0;
         prevSign = 0;
         currentPeriodMs = 4000;
-        graphIdx = 0; graphFull = false; breathGraph.fill(0);
+        graphIdx = 0; graphFull = false;
+        rawGraph.fill(0); filteredGraph.fill(0);
         prevTime = 0;
         targetStability = 0;
       }
@@ -273,6 +260,7 @@
         const cx = w * 0.5, cy = h * 0.38;
         const aspectRatio = w / h;
 
+        // Точки колец
         for (let i = 0; i < points.length; i++) {
           const p = points[i];
           const ring = RINGS[p.ring];
@@ -301,36 +289,61 @@
         }
         ctx.shadowBlur = 0;
 
-        // График дыхания
-        const gy = h * 0.82, gh = 60, gx = 20, gw = w - 40;
-        ctx.fillStyle = 'rgba(0,0,0,0.3)';
-        ctx.fillRect(gx - 5, gy - gh / 2 - 5, gw + 10, gh + 10);
-        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx + gw, gy); ctx.stroke();
+        // ---- ДВА ГРАФИКА ----
+        const gy1 = h * 0.7;
+        const gy2 = h * 0.82;
+        const gh = 50;
+        const gx = 20, gw = w - 40;
 
-        const cnt = graphFull ? BREATH_HIST : graphIdx;
+        // Фон
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(gx - 5, gy1 - gh/2 - 5, gw + 10, gh + 10);
+        ctx.fillRect(gx - 5, gy2 - gh/2 - 5, gw + 10, gh + 10);
+
+        // Подписи
+        ctx.font = '10px monospace';
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.fillText('Сырой гироскоп Z (x Gain)', gx, gy1 - gh/2 - 8);
+        ctx.fillText('Фильтрованное дыхание', gx, gy2 - gh/2 - 8);
+
+        const cnt = graphFull ? HIST : graphIdx;
         if (cnt > 1) {
-          ctx.strokeStyle = 'rgba(255,255,255,0.8)';
-          ctx.lineWidth = 2;
+          // Сырой сигнал (красный)
+          ctx.strokeStyle = 'rgba(255, 100, 100, 0.9)';
+          ctx.lineWidth = 1.5;
           ctx.beginPath();
           const start = graphFull ? graphIdx : 0;
           const step = Math.max(1, Math.floor(cnt / gw));
           for (let i = 0; i < cnt - 1; i += step) {
-            const i1 = (start + i) % BREATH_HIST;
-            const i2 = (start + i + step) % BREATH_HIST;
-            const v1 = breathGraph[i1], v2 = breathGraph[i2];
+            const i1 = (start + i) % HIST;
+            const i2 = (start + i + step) % HIST;
+            const v1 = rawGraph[i1], v2 = rawGraph[i2];
             const x1 = gx + (i / (cnt - 1)) * gw;
             const x2 = gx + ((i + step) / (cnt - 1)) * gw;
-            ctx.moveTo(x1, gy - v1 * 15);
-            ctx.lineTo(x2, gy - v2 * 15);
+            ctx.moveTo(x1, gy1 - v1);
+            ctx.lineTo(x2, gy1 - v2);
+          }
+          ctx.stroke();
+
+          // Фильтрованный (зелёный)
+          ctx.strokeStyle = 'rgba(100, 255, 100, 0.9)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          for (let i = 0; i < cnt - 1; i += step) {
+            const i1 = (start + i) % HIST;
+            const i2 = (start + i + step) % HIST;
+            const v1 = filteredGraph[i1], v2 = filteredGraph[i2];
+            const x1 = gx + (i / (cnt - 1)) * gw;
+            const x2 = gx + ((i + step) / (cnt - 1)) * gw;
+            ctx.moveTo(x1, gy2 - v1 * 15);
+            ctx.lineTo(x2, gy2 - v2 * 15);
           }
           ctx.stroke();
         }
 
         // Отладка
         const periodSec = currentPeriodMs ? (currentPeriodMs / 1000).toFixed(1) : '--';
-        debugEl.textContent = `Gyro Z: ${rawGyroZ.toFixed(3)} | Период: ${periodSec}с | Стаб: ${stabPercent}%`;
+        debugEl.textContent = `Gyro Z (сырой): ${rawGyroZ.toFixed(3)} | Период: ${periodSec}с | Стаб: ${stabPercent}%`;
 
         requestAnimationFrame(draw);
       }
