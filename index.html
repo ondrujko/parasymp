@@ -1,39 +1,76 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Когерентное дыхание — IMU Biofeedback</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: system-ui, sans-serif; }
-    canvas { display: block; width: 100vw; height: 100vh; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: system-ui, sans-serif;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
     #ui {
-      position: absolute; bottom: 20px; left: 0; width: 100%;
-      display: flex; flex-direction: column; align-items: center; gap: 10px;
-      color: white; z-index: 10; pointer-events: none;
+      position: absolute;
+      bottom: 20px;
+      left: 0;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      color: white;
+      z-index: 10;
+      pointer-events: none;
     }
     .coherence-bar {
-      width: 80%; max-width: 300px; height: 8px; background: rgba(255,255,255,0.2); border-radius: 4px;
-      overflow: hidden; margin-top: 5px;
+      width: 80%;
+      max-width: 300px;
+      height: 8px;
+      background: rgba(255,255,255,0.2);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 5px;
     }
     .coherence-fill {
-      height: 100%; width: 0%; background: linear-gradient(90deg, #ff4d4d, #ffdd57, #4caf50);
-      border-radius: 4px; transition: width 0.2s ease;
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #ff4d4d, #ffdd57, #4caf50);
+      border-radius: 4px;
+      transition: width 0.2s ease;
     }
     #coherence-text {
-      font-size: 16px; letter-spacing: 2px; color: rgba(255,255,255,0.8);
+      font-size: 16px;
+      letter-spacing: 2px;
+      color: rgba(255,255,255,0.8);
     }
     button {
-      pointer-events: auto; padding: 12px 24px; background: rgba(255,255,255,0.15);
-      border: 1px solid rgba(255,255,255,0.3); color: white; border-radius: 30px;
-      font-size: 16px; backdrop-filter: blur(10px); cursor: pointer;
+      pointer-events: auto;
+      padding: 12px 24px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: white;
+      border-radius: 30px;
+      font-size: 16px;
+      backdrop-filter: blur(10px);
+      cursor: pointer;
       transition: background 0.2s;
     }
     button:hover { background: rgba(255,255,255,0.25); }
     button:active { background: rgba(255,255,255,0.4); }
     .info {
-      font-size: 12px; color: rgba(255,255,255,0.5); max-width: 80%; text-align: center;
+      font-size: 12px;
+      color: rgba(255,255,255,0.5);
+      max-width: 80%;
+      text-align: center;
       margin-top: 5px;
     }
   </style>
@@ -44,78 +81,95 @@
     <div id="coherence-text">КОГЕРЕНТНОСТЬ 0%</div>
     <div class="coherence-bar"><div id="coherence-fill" class="coherence-fill"></div></div>
     <button id="start-btn">СТАРТ</button>
-    <div class="info">Положите телефон на грудь (экран вверх) и дышите медленно (5-6 вдохов/мин)</div>
+    <div class="info">Положите телефон на грудь экраном вверх и дышите ровно, без лишних движений</div>
   </div>
 
   <script>
-    (function() {
-      // -------------------- DOM элементы --------------------
+    (() => {
+      // -------------------- DOM --------------------
       const canvas = document.getElementById('canvas');
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { alpha: true });
       const startBtn = document.getElementById('start-btn');
       const coherenceText = document.getElementById('coherence-text');
       const coherenceFill = document.getElementById('coherence-fill');
 
-      // -------------------- Параметры визуализации --------------------
+      // -------------------- Визуальные параметры --------------------
       const RINGS = [
-        { count: 28, radiusMin: 55, radiusMax: 110, dotMin: 6, dotMax: 10, rotSpeed: 0.20 },
-        { count: 32, radiusMin: 85, radiusMax: 165, dotMin: 7, dotMax: 10, rotSpeed: 0.10 },
+        { count: 28, radiusMin: 55,  radiusMax: 110, dotMin: 6, dotMax: 10, rotSpeed: 0.20 },
+        { count: 32, radiusMin: 85,  radiusMax: 165, dotMin: 7, dotMax: 10, rotSpeed: 0.10 },
         { count: 36, radiusMin: 115, radiusMax: 220, dotMin: 6, dotMax: 11, rotSpeed: 0.05 },
         { count: 40, radiusMin: 145, radiusMax: 285, dotMin: 6, dotMax: 14, rotSpeed: 0.025 }
       ];
 
-      let points = [];            // массив точек с их начальными параметрами
-      let chaosOffsets = [];     // предварительно вычисленные случайные смещения для хаоса (стабильный шум)
+      let points = [];
+      let chaosOffsets = [];
 
       // -------------------- Состояние анимации --------------------
-      let targetCoherence = 0;   // целевое значение когерентности из анализа (0..1)
-      let currentCoherence = 0;  // сглаженное значение для плавной анимации
-      let breathPhase = 0;       // фаза дыхания для анимации (0..2PI)
-      let time = 0;              // общее время анимации
+      let targetCoherence = 0;
+      let currentCoherence = 0;
+      let breathPhase = 0;
+      let simTime = 0;
+      let lastFrameTs = 0;
 
-      // -------------------- Фильтры и анализ сигнала --------------------
-      // Буферы для данных акселерометра (ось Z — перпендикулярно груди)
-      const BUFFER_SIZE = 256;
-      let accelZBuffer = new Float32Array(BUFFER_SIZE);
-      let bufferIndex = 0;
-      let bufferFilled = false;
+      // -------------------- Обработка IMU --------------------
+      let sensorActive = false;
 
-      // Состояние для выделения дыхательной волны
-      let filteredBreath = 0;        // текущее отфильтрованное значение дыхания
-      let breathHistory = [];        // история пиков для вычисления вариабельности
-      const BREATH_HISTORY_MAX = 12; // последние 12 периодов дыхания
-      let lastBreathPeakTime = 0;
-      let breathPeriod = 4000;       // начальное предположение 4 сек
-      let breathPeriodMA = 4000;     // скользящее среднее периода
+      // Временные ряды дыхательного сигнала
+      let baselineFast = 0;
+      let baselineSlow = 0;
+      let signalInitialized = false;
 
-      // Фильтр для дыхания: полосовой 0.08-0.5 Гц, частота дискретизации ~50 Гц
-      // Используем простой фильтр скользящего среднего с последующей детрендизацией
-      const breathLowFreq = 0.08;
-      const breathHighFreq = 0.5;
-      const sampleRate = 50; // Гц, можно адаптировать под реальную частоту событий
+      // Для детектора локального максимума
+      let prevSignal2 = 0;
+      let prevSignal1 = 0;
+      let prevTime1 = 0;
+      let prevTime2 = 0;
+
+      // История периодов дыхания
+      let breathPeriods = [];
+      const BREATH_HISTORY_MAX = 12;
+      let lastPeakTime = 0;
+
+      // Для динамического порога
+      let noiseEma = 0;
+
+      // Параметры фильтров в секундах
+      const FAST_TAU = 0.22;
+      const SLOW_TAU = 1.8;
+      const NOISE_TAU = 2.5;
+
+      function clamp(v, min, max) {
+        return Math.max(min, Math.min(max, v));
+      }
+
+      function emaAlpha(dtMs, tauSec) {
+        const dt = dtMs / 1000;
+        return dt / (tauSec + dt);
+      }
+
+      function smoothstep(t) {
+        return 0.5 - 0.5 * Math.cos(Math.PI * t);
+      }
 
       // -------------------- Инициализация точек --------------------
       function initPoints() {
         points = [];
         chaosOffsets = [];
-        // Генерируем случайные, но постоянные смещения для хаоса (чтобы облако не мерцало)
+
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+
         for (let r = 0; r < RINGS.length; r++) {
           const ring = RINGS[r];
           for (let i = 0; i < ring.count; i++) {
-            // Хаотичная позиция: случайные координаты в области экрана с небольшим разбросом
-            const chaoticBaseX = Math.random() * canvas.width;
-            const chaoticBaseY = Math.random() * canvas.height;
-            // Добавляем небольшие случайные векторы для плавного дрейфа
-            const driftSpeedX = (Math.random() - 0.5) * 0.5;
-            const driftSpeedY = (Math.random() - 0.5) * 0.5;
             chaosOffsets.push({
-              baseX: chaoticBaseX,
-              baseY: chaoticBaseY,
-              driftX: driftSpeedX,
-              driftY: driftSpeedY,
-              // начальная фаза для шума
+              baseX: Math.random() * width,
+              baseY: Math.random() * height,
+              driftX: (Math.random() - 0.5) * 0.5,
+              driftY: (Math.random() - 0.5) * 0.5,
               phase: Math.random() * Math.PI * 2
             });
+
             points.push({
               ringIndex: r,
               indexInRing: i,
@@ -124,72 +178,228 @@
               baseRadiusMax: ring.radiusMax,
               dotSizeMin: ring.dotMin,
               dotSizeMax: ring.dotMax,
+              sizeJitter: 0.6 + Math.random() * 1.2
             });
           }
         }
       }
 
-      // -------------------- Плавная функция --------------------
-      function smoothstep(t) {
-        return 0.5 - 0.5 * Math.cos(Math.PI * t);
+      // -------------------- Размер canvas --------------------
+      function resize() {
+        const dpr = window.devicePixelRatio || 1;
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+
+        canvas.width = Math.round(width * dpr);
+        canvas.height = Math.round(height * dpr);
+
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        if (chaosOffsets.length > 0) {
+          for (let i = 0; i < chaosOffsets.length; i++) {
+            chaosOffsets[i].baseX = Math.random() * width;
+            chaosOffsets[i].baseY = Math.random() * height;
+          }
+        }
       }
 
-      // -------------------- Отрисовка --------------------
-      function draw() {
-        const width = canvas.width;
-        const height = canvas.height;
+      window.addEventListener('resize', resize);
+
+      // -------------------- Анализ motion --------------------
+      function processMotionSample(rawValue, nowTs) {
+        if (!signalInitialized) {
+          baselineFast = rawValue;
+          baselineSlow = rawValue;
+          prevSignal2 = 0;
+          prevSignal1 = 0;
+          prevTime1 = nowTs;
+          prevTime2 = nowTs;
+          signalInitialized = true;
+          return;
+        }
+
+        const dt1 = Math.max(1, nowTs - prevTime1);
+        const aFast = emaAlpha(dt1, FAST_TAU);
+        const aSlow = emaAlpha(dt1, SLOW_TAU);
+        const aNoise = emaAlpha(dt1, NOISE_TAU);
+
+        baselineFast += aFast * (rawValue - baselineFast);
+        baselineSlow += aSlow * (rawValue - baselineSlow);
+
+        const bandPassed = baselineFast - baselineSlow;
+
+        // Динамический шумовой уровень, чтобы порог не был фиксированным
+        noiseEma += aNoise * (Math.abs(bandPassed) - noiseEma);
+        const threshold = Math.max(0.01, noiseEma * 1.25);
+
+        // Детектор локального максимума:
+        // prevSignal2 -> prevSignal1 -> current
+        // Если prevSignal1 выше соседей и выше порога, фиксируем пик
+        const peakCandidate = prevSignal1;
+        const peakTimeCandidate = prevTime1;
+        const minPeriodMs = 1000;   // 60 вдохов/мин
+        const maxPeriodMs = 10000;  // 6 вдохов/мин
+
+        if (
+          peakCandidate > threshold &&
+          peakCandidate > prevSignal2 &&
+          peakCandidate >= bandPassed &&
+          (peakTimeCandidate - lastPeakTime) > minPeriodMs &&
+          (peakTimeCandidate - lastPeakTime) < maxPeriodMs
+        ) {
+          if (lastPeakTime !== 0) {
+            const period = peakTimeCandidate - lastPeakTime;
+            breathPeriods.push(period);
+            if (breathPeriods.length > BREATH_HISTORY_MAX) breathPeriods.shift();
+
+            if (breathPeriods.length >= 3) {
+              const mean = breathPeriods.reduce((a, b) => a + b, 0) / breathPeriods.length;
+              const variance = breathPeriods.reduce((sum, p) => sum + (p - mean) * (p - mean), 0) / breathPeriods.length;
+              const stdDev = Math.sqrt(variance);
+              const cv = stdDev / mean;
+
+              // Чем меньше вариабельность периода, тем выше "когерентность"
+              const coherence = Math.exp(-5 * cv);
+              targetCoherence = clamp(coherence, 0, 1);
+            } else {
+              targetCoherence = 0;
+            }
+          }
+
+          lastPeakTime = peakTimeCandidate;
+        }
+
+        prevSignal2 = prevSignal1;
+        prevSignal1 = bandPassed;
+        prevTime2 = prevTime1;
+        prevTime1 = nowTs;
+      }
+
+      function onDeviceMotion(event) {
+        const a = event.accelerationIncludingGravity;
+        if (!a) return;
+
+        const ax = typeof a.x === 'number' ? a.x : 0;
+        const ay = typeof a.y === 'number' ? a.y : 0;
+        const az = typeof a.z === 'number' ? a.z : 0;
+
+        // Сигнал по модулю — менее зависим от ориентации, чем одна ось
+        // Для устройства на груди это обычно стабильнее, чем жёсткая привязка к z.
+        const raw = Math.sqrt(ax * ax + ay * ay + az * az);
+
+        const now = performance.now();
+        processMotionSample(raw, now);
+      }
+
+      // -------------------- Запуск / остановка датчиков --------------------
+      async function startSensors() {
+        if (sensorActive) return;
+
+        if (typeof DeviceMotionEvent === 'undefined') {
+          alert('Ваше устройство не поддерживает датчики движения');
+          return;
+        }
+
+        try {
+          if (typeof DeviceMotionEvent.requestPermission === 'function') {
+            const permissionState = await DeviceMotionEvent.requestPermission();
+            if (permissionState !== 'granted') {
+              alert('Разрешение на доступ к датчикам отклонено');
+              return;
+            }
+          }
+
+          window.addEventListener('devicemotion', onDeviceMotion, { passive: true });
+          sensorActive = true;
+          startBtn.textContent = 'ПАУЗА';
+        } catch (err) {
+          console.error(err);
+          alert('Не удалось активировать датчики');
+        }
+      }
+
+      function stopSensors() {
+        if (!sensorActive) return;
+
+        window.removeEventListener('devicemotion', onDeviceMotion);
+        sensorActive = false;
+        startBtn.textContent = 'СТАРТ';
+
+        // Сброс состояния анализа
+        baselineFast = 0;
+        baselineSlow = 0;
+        signalInitialized = false;
+        prevSignal2 = 0;
+        prevSignal1 = 0;
+        prevTime1 = 0;
+        prevTime2 = 0;
+        breathPeriods = [];
+        lastPeakTime = 0;
+        noiseEma = 0;
+        targetCoherence = 0;
+      }
+
+      startBtn.addEventListener('click', () => {
+        if (sensorActive) stopSensors();
+        else startSensors();
+      });
+
+      // -------------------- Рендер --------------------
+      function draw(ts) {
+        if (!lastFrameTs) lastFrameTs = ts;
+        const dt = Math.min(50, ts - lastFrameTs);
+        lastFrameTs = ts;
+        simTime += dt;
+
+        const width = window.innerWidth;
+        const height = window.innerHeight;
         ctx.clearRect(0, 0, width, height);
 
         const centerX = width * 0.5;
         const centerY = height * 0.43;
 
-        // Сглаживаем когерентность
-        const smoothingFactor = 0.05;
-        currentCoherence += (targetCoherence - currentCoherence) * smoothingFactor;
-        // Обновляем UI
+        // Плавное приближение UI к целевой когерентности
+        currentCoherence += (targetCoherence - currentCoherence) * 0.05;
         const coherencePercent = Math.round(currentCoherence * 100);
         coherenceText.textContent = `КОГЕРЕНТНОСТЬ ${coherencePercent}%`;
         coherenceFill.style.width = `${coherencePercent}%`;
 
-        // Параметры дыхания для анимации (фаза и амплитуда)
-        const breath = (Math.sin(breathPhase) + 1) * 0.5; // 0..1
+        // Фаза дыхания — визуальная, по оценке периода
+        const estimatedPeriod = breathPeriods.length >= 1
+          ? breathPeriods.reduce((a, b) => a + b, 0) / breathPeriods.length
+          : 4000;
+
+        breathPhase += (2 * Math.PI) * (dt / estimatedPeriod);
+        breathPhase %= (Math.PI * 2);
+
+        const breath = (Math.sin(breathPhase) + 1) * 0.5;
         const easedBreath = smoothstep(breath);
 
-        // Вращение колец зависит от времени и когерентности (при низкой когерентности вращение замедляется)
         const rotationFactor = currentCoherence;
 
-        // Рисуем каждую точку
         for (let i = 0; i < points.length; i++) {
           const p = points[i];
           const ring = RINGS[p.ringIndex];
           const chaos = chaosOffsets[i];
 
-          // Идеальная позиция на кольце
-          const angle = p.angleOffset + time * 0.00015 * ring.rotSpeed * rotationFactor;
+          const angle = p.angleOffset + simTime * 0.00015 * ring.rotSpeed * rotationFactor;
           const radius = p.baseRadiusMin + (p.baseRadiusMax - p.baseRadiusMin) * easedBreath;
           const idealX = centerX + Math.cos(angle) * radius;
           const idealY = centerY + Math.sin(angle) * radius;
 
-          // Хаотичная позиция с дрейфом (используем синусоидальный шум для плавности)
-          const driftX = Math.sin(time * 0.0005 + chaos.phase) * 20 * chaos.driftX;
-          const driftY = Math.cos(time * 0.0007 + chaos.phase) * 20 * chaos.driftY;
-          let chaoticX = chaos.baseX + driftX;
-          let chaoticY = chaos.baseY + driftY;
-          // Ограничиваем, чтобы не выходило далеко за экран
-          chaoticX = Math.max(0, Math.min(width, chaoticX));
-          chaoticY = Math.max(0, Math.min(height, chaoticY));
+          const driftX = Math.sin(simTime * 0.0005 + chaos.phase) * 20 * chaos.driftX;
+          const driftY = Math.cos(simTime * 0.0007 + chaos.phase) * 20 * chaos.driftY;
 
-          // Интерполяция позиции в зависимости от когерентности
+          const chaoticX = clamp(chaos.baseX + driftX, 0, width);
+          const chaoticY = clamp(chaos.baseY + driftY, 0, height);
+
           const x = chaoticX + (idealX - chaoticX) * currentCoherence;
           const y = chaoticY + (idealY - chaoticY) * currentCoherence;
 
-          // Размер точки и прозрачность
           const idealSize = p.dotSizeMin + (p.dotSizeMax - p.dotSizeMin) * easedBreath;
-          const chaoticSize = 3 + Math.random() * 2; // маленький случайный размер для хаоса
+          const chaoticSize = p.sizeJitter;
           const dotSize = chaoticSize + (idealSize - chaoticSize) * currentCoherence;
           const alpha = 0.3 + 0.7 * currentCoherence;
-
-          // Свечение
           const glow = dotSize * 2 * currentCoherence;
 
           ctx.beginPath();
@@ -198,188 +408,18 @@
           ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.5})`;
           ctx.shadowBlur = glow;
           ctx.fill();
-          // Сброс тени для остальных операций (хотя здесь не критично)
-          ctx.shadowBlur = 0;
         }
 
-        // Обновляем фазу дыхания для анимации (она зависит от реального периода или модельного)
-        // Если есть захваченный период дыхания, используем его, иначе по умолчанию 4 секунды
-        const period = breathPeriodMA || 4000;
-        breathPhase += (2 * Math.PI) / (period / 16.67); // примерно 60 fps -> 16.67ms на кадр
-        if (breathPhase > 2 * Math.PI) breathPhase -= 2 * Math.PI;
-
-        time += 16.67; // приблизительное время кадра
+        ctx.shadowBlur = 0;
+        requestAnimationFrame(draw);
       }
-
-      // -------------------- Обработка сигнала IMU --------------------
-      function onDeviceMotion(event) {
-        // Берем ускорение по оси Z (перпендикулярно экрану, если телефон лежит на груди экраном вверх)
-        const accelZ = event.accelerationIncludingGravity?.z;
-        if (accelZ === undefined || accelZ === null) return;
-
-        // Добавляем в кольцевой буфер
-        accelZBuffer[bufferIndex % BUFFER_SIZE] = accelZ;
-        bufferIndex++;
-        if (bufferIndex >= BUFFER_SIZE && !bufferFilled) bufferFilled = true;
-
-        // Анализируем только когда буфер заполнен
-        if (!bufferFilled) return;
-
-        // Простая фильтрация для выделения дыхательной волны:
-        // 1. Скользящее среднее для удаления высокочастотных шумов
-        const windowSize = 5;
-        let sum = 0;
-        const startIdx = Math.max(0, bufferIndex - windowSize);
-        for (let i = startIdx; i < bufferIndex; i++) {
-          sum += accelZBuffer[i % BUFFER_SIZE];
-        }
-        const avgZ = sum / Math.min(windowSize, bufferIndex);
-        // 2. Детрендинг через разность с долгосрочным средним (очень низкочастотный фильтр)
-        const longTermAvg = calculateLongTermAverage();
-        const detrended = avgZ - longTermAvg;
-        // Обновляем отфильтрованное дыхание с экспоненциальным сглаживанием
-        filteredBreath = 0.7 * filteredBreath + 0.3 * detrended;
-
-        // Поиск пиков для определения периода дыхания
-        // Простой алгоритм: пересечение нуля с положительным градиентом
-        if (filteredBreath > 0 && lastFilteredBreath <= 0) {
-          // Обнаружен вдох (переход через ноль вверх)
-          const now = performance.now();
-          if (lastBreathPeakTime !== 0) {
-            const period = now - lastBreathPeakTime;
-            if (period > 1000 && period < 10000) { // допустимый диапазон периода дыхания (10-60 вдохов/мин)
-              breathPeriod = period;
-              // Добавляем в историю для расчёта вариабельности
-              breathHistory.push(period);
-              if (breathHistory.length > BREATH_HISTORY_MAX) breathHistory.shift();
-              // Обновляем скользящее среднее периода
-              if (breathHistory.length > 1) {
-                const avgPeriod = breathHistory.reduce((a, b) => a + b, 0) / breathHistory.length;
-                breathPeriodMA = avgPeriod;
-              }
-            }
-          }
-          lastBreathPeakTime = now;
-        }
-        lastFilteredBreath = filteredBreath;
-
-        // Вычисление когерентности на основе стабильности дыхания (BRV)
-        if (breathHistory.length >= 3) {
-          const meanPeriod = breathHistory.reduce((a, b) => a + b, 0) / breathHistory.length;
-          const variance = breathHistory.reduce((sum, p) => sum + Math.pow(p - meanPeriod, 2), 0) / breathHistory.length;
-          const stdDev = Math.sqrt(variance);
-          // Нормализованная вариабельность: CV = stdDev / mean
-          const cv = stdDev / meanPeriod;
-          // Когерентность: чем меньше CV, тем ближе к 1. Используем экспоненциальное преобразование
-          const coherence = Math.exp(-5 * cv); // подбираем коэффициент для чувствительности
-          targetCoherence = Math.min(1, Math.max(0, coherence));
-        } else {
-          targetCoherence = 0; // недостаточно данных
-        }
-      }
-
-      let lastFilteredBreath = 0;
-      let longTermSum = 0;
-      let longTermCount = 0;
-
-      function calculateLongTermAverage() {
-        // Простое долгосрочное среднее по всему буферу
-        let sum = 0;
-        const count = Math.min(bufferIndex, BUFFER_SIZE);
-        for (let i = 0; i < count; i++) {
-          sum += accelZBuffer[i % BUFFER_SIZE];
-        }
-        return sum / count;
-      }
-
-      // -------------------- Запуск и остановка датчиков --------------------
-      let sensorActive = false;
-
-      function startSensors() {
-        if (sensorActive) return;
-        // Проверка поддержки DeviceMotionEvent
-        if (typeof DeviceMotionEvent !== 'undefined') {
-          // Для iOS необходимо запросить разрешение (только для устройств с iOS 13+)
-          if (typeof DeviceMotionEvent.requestPermission === 'function') {
-            DeviceMotionEvent.requestPermission()
-              .then(permissionState => {
-                if (permissionState === 'granted') {
-                  window.addEventListener('deviceorientation', onDeviceMotion);
-                  sensorActive = true;
-                  startBtn.textContent = 'ПАУЗА';
-                  console.log('Датчики активированы');
-                } else {
-                  alert('Разрешение на доступ к датчикам отклонено');
-                }
-              })
-              .catch(console.error);
-          } else {
-            // Android или старые iOS
-            window.addEventListener('deviceorientation', onDeviceMotion);
-            sensorActive = true;
-            startBtn.textContent = 'ПАУЗА';
-          }
-        } else {
-          alert('Ваше устройство не поддерживает датчики движения');
-        }
-      }
-
-      function stopSensors() {
-        if (!sensorActive) return;
-        window.removeEventListener('deviceorientation', onDeviceMotion);
-        sensorActive = false;
-        startBtn.textContent = 'СТАРТ';
-        // Сброс буфера
-        bufferIndex = 0;
-        bufferFilled = false;
-        breathHistory = [];
-        targetCoherence = 0;
-      }
-
-      // Кнопка старт/стоп
-      startBtn.addEventListener('click', () => {
-        if (sensorActive) {
-          stopSensors();
-        } else {
-          startSensors();
-        }
-      });
-
-      // -------------------- Анимационный цикл --------------------
-      function animationLoop() {
-        draw();
-        requestAnimationFrame(animationLoop);
-      }
-
-      // -------------------- Адаптация размера canvas --------------------
-      function resize() {
-        canvas.width = window.innerWidth * window.devicePixelRatio;
-        canvas.height = window.innerHeight * window.devicePixelRatio;
-        ctx.setTransform(
-          window.devicePixelRatio, 0,
-          0, window.devicePixelRatio,
-          0, 0
-        );
-        // Переинициализируем хаотичные позиции при изменении размера, чтобы они оставались в пределах экрана
-        if (chaosOffsets.length > 0) {
-          for (let i = 0; i < chaosOffsets.length; i++) {
-            chaosOffsets[i].baseX = Math.random() * canvas.width;
-            chaosOffsets[i].baseY = Math.random() * canvas.height;
-          }
-        }
-      }
-
-      window.addEventListener('resize', resize);
 
       // -------------------- Инициализация --------------------
       function init() {
         resize();
         initPoints();
-        // Запускаем анимацию
-        animationLoop();
-        // По умолчанию датчики выключены, пользователь нажимает кнопку
         startBtn.textContent = 'СТАРТ';
-        // Для теста можно сразу включить, но лучше по кнопке
+        requestAnimationFrame(draw);
       }
 
       init();
