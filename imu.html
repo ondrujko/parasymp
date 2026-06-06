@@ -118,6 +118,15 @@ canvas{
     <canvas id="gyro"></canvas>
   </div>
 
+  <div class="panel">
+    <div class="legend">
+      <div class="item"><span class="dot x"></span>X</div>
+      <div class="item"><span class="dot y"></span>Y</div>
+      <div class="item"><span class="dot z"></span>Z</div>
+    </div>
+    <canvas id="acc_mag"></canvas>
+  </div>
+
 </div>
 
 <script>
@@ -128,15 +137,20 @@ const WINDOW = 10000;
 const accel = [];
 const gyro = [];
 
+const accMag = [];
+
 let running = false;
 let demo = false;
 let demoStart = 0;
 
 const cA = document.getElementById("accel");
 const cG = document.getElementById("gyro");
+const cAM = document.getElementById("acc_mag");
 
 const a = cA.getContext("2d");
 const g = cG.getContext("2d");
+
+const aM = cA.getContext("2d");
 
 function now(){ return performance.now(); }
 
@@ -157,6 +171,7 @@ function onMotion(e){
 
   if(acc){
     push(accel,t,acc.x||0,acc.y||0,acc.z||0);
+    push(accMag,t, (acc.x**2+acc.y**2+acc.z**2)**0.5;
   }
 
   if(rot){
@@ -250,6 +265,8 @@ function loop(){
 
   draw(a,cA,accel);
   draw(g,cG,gyro);
+
+  draw(aM,cAM,accMag);
 
   requestAnimationFrame(loop);
 }
