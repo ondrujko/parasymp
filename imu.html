@@ -1,1075 +1,277 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>IMU Signal Monitor — 10-Second Window</title>
-    <style>
-        :root {
-            --bg: #0d1117;
-            --surface: #161b22;
-            --border: #30363d;
-            --text: #e6edf3;
-            --text-secondary: #8b949e;
-            --accent: #58a6ff;
-            --red: #ff6b6b;
-            --green: #51cf66;
-            --blue: #339af0;
-            --grid: #21262d;
-            --glow-red: rgba(255, 107, 107, 0.5);
-            --glow-green: rgba(81, 207, 102, 0.5);
-            --glow-blue: rgba(51, 154, 240, 0.5);
-        }
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>IMU Signal Monitor — 10s Window (fixed)</title>
 
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+<style>
+:root{
+  --bg:#0d1117;
+  --surface:#161b22;
+  --border:#30363d;
+  --text:#e6edf3;
+  --text-secondary:#8b949e;
+  --accent:#58a6ff;
+}
 
-        body {
-            font-family: 'SF Mono', 'JetBrains Mono', 'Consolas', 'Menlo', monospace;
-            background: var(--bg);
-            color: var(--text);
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 12px;
-            -webkit-tap-highlight-color: transparent;
-            -webkit-user-select: none;
-            user-select: none;
-        }
+*{box-sizing:border-box;margin:0;padding:0}
 
-        .app-container {
-            width: 100%;
-            max-width: 700px;
-            background: var(--surface);
-            border-radius: 16px;
-            border: 1px solid var(--border);
-            padding: 20px 16px 24px;
-            box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
-        }
+body{
+  font-family:system-ui, monospace;
+  background:var(--bg);
+  color:var(--text);
+  display:flex;
+  justify-content:center;
+  padding:12px;
+}
 
-        .header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-bottom: 16px;
-        }
+.app{
+  width:100%;
+  max-width:900px;
+}
 
-        .title-group {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
+.header{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:10px;
+}
 
-        .logo-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: var(--accent);
-            box-shadow: 0 0 10px var(--accent), 0 0 24px rgba(88, 166, 255, 0.5);
-            animation: pulse-dot 1.8s ease-in-out infinite;
-        }
+button{
+  padding:8px 14px;
+  border:1px solid var(--border);
+  background:var(--surface);
+  color:var(--text);
+  cursor:pointer;
+}
 
-        .logo-dot.inactive {
-            background: #555;
-            box-shadow: none;
-            animation: none;
-        }
+button.primary{
+  background:var(--accent);
+  color:#000;
+}
 
-        .logo-dot.demo {
-            background: #f0a500;
-            box-shadow: 0 0 10px #f0a500, 0 0 24px rgba(240, 165, 0, 0.5);
-            animation: pulse-dot 1.2s ease-in-out infinite;
-        }
+.panel{
+  background:var(--surface);
+  border:1px solid var(--border);
+  margin-top:10px;
+  padding:10px;
+  border-radius:10px;
+}
 
-        @keyframes pulse-dot {
-            0%,
-            100% {
-                box-shadow: 0 0 6px var(--accent), 0 0 16px rgba(88, 166, 255, 0.4);
-            }
-            50% {
-                box-shadow: 0 0 16px var(--accent), 0 0 36px rgba(88, 166, 255, 0.8);
-            }
-        }
-
-        h1 {
-            font-size: 1.2rem;
-            font-weight: 600;
-            letter-spacing: 0.02em;
-            color: var(--text);
-            white-space: nowrap;
-        }
-
-        .status-badge {
-            font-size: 0.7rem;
-            padding: 4px 10px;
-            border-radius: 20px;
-            background: #1a3a1a;
-            color: #4ade80;
-            border: 1px solid #2d5a2d;
-            letter-spacing: 0.04em;
-            white-space: nowrap;
-        }
-        .status-badge.waiting {
-            background: #1a1a2e;
-            color: #8b949e;
-            border-color: #30363d;
-        }
-        .status-badge.demo-mode {
-            background: #2e1f0a;
-            color: #f0a500;
-            border-color: #5a3e0a;
-        }
-
-        .btn-row {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        .btn {
-            font-family: inherit;
-            font-size: 0.8rem;
-            padding: 10px 18px;
-            border-radius: 25px;
-            border: 1px solid var(--border);
-            cursor: pointer;
-            letter-spacing: 0.03em;
-            font-weight: 500;
-            transition: all 0.2s ease;
-            background: var(--surface);
-            color: var(--text);
-            white-space: nowrap;
-            outline: none;
-        }
-
-        .btn-primary {
-            background: var(--accent);
-            color: #000;
-            border-color: var(--accent);
-            font-weight: 600;
-        }
-        .btn-primary:hover {
-            background: #79b8ff;
-            box-shadow: 0 0 20px rgba(88, 166, 255, 0.35);
-        }
-        .btn-primary:active {
-            transform: scale(0.96);
-        }
-        .btn-sm {
-            font-size: 0.7rem;
-            padding: 7px 14px;
-            border-radius: 18px;
-        }
-        .btn-outline {
-            background: transparent;
-            border: 1px solid #555;
-            color: #aaa;
-        }
-        .btn-outline:hover {
-            border-color: #888;
-            color: #ddd;
-        }
-
-        .chart-panel {
-            background: #0d1117;
-            border: 1px solid var(--grid);
-            border-radius: 12px;
-            padding: 10px 6px 6px;
-            margin-bottom: 12px;
-            position: relative;
-        }
-
-        .chart-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 8px;
-            margin-bottom: 2px;
-        }
-        .chart-title {
-            font-size: 0.75rem;
-            font-weight: 600;
-            letter-spacing: 0.04em;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-        }
-        .legend {
-            display: flex;
-            gap: 14px;
-            font-size: 0.65rem;
-            letter-spacing: 0.03em;
-        }
-        .legend-item {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-        .legend-dot {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            flex-shrink: 0;
-        }
-        .legend-dot.x {
-            background: var(--red);
-            box-shadow: 0 0 6px var(--glow-red);
-        }
-        .legend-dot.y {
-            background: var(--green);
-            box-shadow: 0 0 6px var(--glow-green);
-        }
-        .legend-dot.z {
-            background: var(--blue);
-            box-shadow: 0 0 6px var(--glow-blue);
-        }
-
-        canvas {
-            display: block;
-            width: 100%;
-            height: auto;
-            border-radius: 8px;
-        }
-
-        .current-values {
-            display: flex;
-            gap: 16px;
-            padding: 4px 10px;
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-            letter-spacing: 0.03em;
-            flex-wrap: wrap;
-        }
-        .current-values span {
-            white-space: nowrap;
-        }
-        .val-x {
-            color: #ff9999;
-        }
-        .val-y {
-            color: #6ee07e;
-        }
-        .val-z {
-            color: #5cb8ff;
-        }
-
-        .no-sensors-msg {
-            text-align: center;
-            padding: 20px;
-            color: var(--text-secondary);
-            font-size: 0.8rem;
-            display: none;
-            letter-spacing: 0.03em;
-        }
-        .no-sensors-msg.visible {
-            display: block;
-        }
-
-        @media (max-width: 480px) {
-            .app-container {
-                padding: 14px 8px 16px;
-                border-radius: 12px;
-            }
-            h1 {
-                font-size: 1rem;
-            }
-            .btn {
-                font-size: 0.7rem;
-                padding: 8px 14px;
-            }
-            .legend {
-                gap: 8px;
-                font-size: 0.6rem;
-            }
-            .chart-panel {
-                padding: 6px 2px 4px;
-            }
-            .current-values {
-                gap: 8px;
-                font-size: 0.6rem;
-            }
-        }
-    </style>
+canvas{
+  width:100%;
+  height:220px;
+}
+</style>
 </head>
+
 <body>
-    <div class="app-container">
-        <!-- Header -->
-        <div class="header">
-            <div class="title-group">
-                <div class="logo-dot inactive" id="statusDot"></div>
-                <h1>IMU Monitor</h1>
-                <span class="status-badge waiting" id="statusBadge">Ожидание</span>
-            </div>
-            <div class="btn-row">
-                <button class="btn btn-outline btn-sm" id="btnDemo" title="Демо-режим с симулированными данными">🎭 Демо</button>
-                <button class="btn btn-primary" id="btnStart">▶ Запустить</button>
-            </div>
-        </div>
+<div class="app">
 
-        <!-- No sensors message -->
-        <div class="no-sensors-msg" id="noSensorsMsg">
-            ⚠️ Датчики IMU не обнаружены на этом устройстве.<br>
-            <span style="font-size:0.7rem;">Попробуйте открыть на смартфоне или включите Демо-режим.</span>
-        </div>
-
-        <!-- Accelerometer Chart -->
-        <div class="chart-panel" id="accelPanel">
-            <div class="chart-header">
-                <span class="chart-title">📊 Акселерометр (м/с²)</span>
-                <div class="legend">
-                    <span class="legend-item"><span class="legend-dot x"></span> X</span>
-                    <span class="legend-item"><span class="legend-dot y"></span> Y</span>
-                    <span class="legend-item"><span class="legend-dot z"></span> Z</span>
-                </div>
-            </div>
-            <canvas id="canvasAccel" height="220"></canvas>
-            <div class="current-values" id="accelValues">
-                <span>X: <span class="val-x">--</span></span>
-                <span>Y: <span class="val-y">--</span></span>
-                <span>Z: <span class="val-z">--</span></span>
-            </div>
-        </div>
-
-        <!-- Gyroscope Chart -->
-        <div class="chart-panel" id="gyroPanel">
-            <div class="chart-header">
-                <span class="chart-title">🔄 Гироскоп (°/с)</span>
-                <div class="legend">
-                    <span class="legend-item"><span class="legend-dot x"></span> X</span>
-                    <span class="legend-item"><span class="legend-dot y"></span> Y</span>
-                    <span class="legend-item"><span class="legend-dot z"></span> Z</span>
-                </div>
-            </div>
-            <canvas id="canvasGyro" height="220"></canvas>
-            <div class="current-values" id="gyroValues">
-                <span>X: <span class="val-x">--</span></span>
-                <span>Y: <span class="val-y">--</span></span>
-                <span>Z: <span class="val-z">--</span></span>
-            </div>
-        </div>
+  <div class="header">
+    <div>IMU Monitor (fixed time sync)</div>
+    <div>
+      <button id="start">Start</button>
+      <button id="demo">Demo</button>
     </div>
+  </div>
 
-    <script>
-        (function() {
-            // ──────────────────────────────────────
-            // DOM элементы
-            // ──────────────────────────────────────
-            const canvasAccel = document.getElementById('canvasAccel');
-            const canvasGyro = document.getElementById('canvasGyro');
-            const ctxAccel = canvasAccel.getContext('2d');
-            const ctxGyro = canvasGyro.getContext('2d');
-            const btnStart = document.getElementById('btnStart');
-            const btnDemo = document.getElementById('btnDemo');
-            const statusDot = document.getElementById('statusDot');
-            const statusBadge = document.getElementById('statusBadge');
-            const noSensorsMsg = document.getElementById('noSensorsMsg');
-            const accelValuesEl = document.getElementById('accelValues');
-            const gyroValuesEl = document.getElementById('gyroValues');
-
-            // ──────────────────────────────────────
-            // Конфигурация
-            // ──────────────────────────────────────
-            const WINDOW_MS = 10000; // 10 секунд
-            const PRUNE_INTERVAL_MS = 200; // интервал очистки старых данных
-            const DPR = Math.min(window.devicePixelRatio || 1, 2); // ограничим DPR для производительности
-            const PADDING = { top: 18, right: 16, bottom: 28, left: 50 }; // отступы внутри canvas
-
-            // ──────────────────────────────────────
-            // Хранилище данных
-            // ──────────────────────────────────────
-            let accelData = []; // { time, x, y, z }
-            let gyroData = []; // { time, x, y, z }
-            let isRunning = false;
-            let isDemoMode = false;
-            let demoStartTime = 0;
-            let lastPruneTime = 0;
-            let animFrameId = null;
-
-            // ──────────────────────────────────────
-            // Вспомогательные функции
-            // ──────────────────────────────────────
-            function now() {
-                return performance.now();
-            }
-
-            function pruneData(dataArray, currentTime) {
-                const cutoff = currentTime - WINDOW_MS;
-                // Бинарный поиск для эффективности при большом количестве точек
-                let lo = 0;
-                let hi = dataArray.length;
-                while (lo < hi) {
-                    const mid = (lo + hi) >>> 1;
-                    if (dataArray[mid].time < cutoff) {
-                        lo = mid + 1;
-                    } else {
-                        hi = mid;
-                    }
-                }
-                if (lo > 0) {
-                    dataArray.splice(0, lo);
-                }
-            }
-
-            function getVisibleData(dataArray, currentTime) {
-                const cutoff = currentTime - WINDOW_MS;
-                const result = [];
-                for (let i = dataArray.length - 1; i >= 0; i--) {
-                    if (dataArray[i].time >= cutoff) {
-                        result.unshift(dataArray[i]);
-                    } else {
-                        break;
-                    }
-                }
-                return result;
-            }
-
-            function computeYRange(dataArray, currentTime, minRange) {
-                const cutoff = currentTime - WINDOW_MS;
-                let minVal = Infinity;
-                let maxVal = -Infinity;
-                for (const pt of dataArray) {
-                    if (pt.time >= cutoff) {
-                        if (pt.x < minVal) minVal = pt.x;
-                        if (pt.x > maxVal) maxVal = pt.x;
-                        if (pt.y < minVal) minVal = pt.y;
-                        if (pt.y > maxVal) maxVal = pt.y;
-                        if (pt.z < minVal) minVal = pt.z;
-                        if (pt.z > maxVal) maxVal = pt.z;
-                    }
-                }
-                if (!isFinite(minVal) || !isFinite(maxVal)) {
-                    return { min: -minRange / 2, max: minRange / 2 };
-                }
-                const range = maxVal - minVal;
-                const paddedRange = Math.max(range, minRange * 0.3) * 1.2;
-                const center = (minVal + maxVal) / 2;
-                const halfRange = paddedRange / 2;
-                // Округляем до красивых чисел
-                const roughStep = paddedRange / 6;
-                const niceStep = niceNumber(roughStep);
-                const niceMin = Math.floor((center - halfRange) / niceStep) * niceStep;
-                const niceMax = Math.ceil((center + halfRange) / niceStep) * niceStep;
-                return {
-                    min: Math.min(niceMin, center - minRange / 2),
-                    max: Math.max(niceMax, center + minRange / 2),
-                };
-            }
-
-            function niceNumber(x) {
-                const exponent = Math.floor(Math.log10(Math.abs(x) || 1));
-                const fraction = (x || 1) / Math.pow(10, exponent);
-                let nice;
-                if (fraction <= 1)
-                    nice = 1;
-                else if (fraction <= 2)
-                    nice = 2;
-                else if (fraction <= 5)
-                    nice = 5;
-                else nice = 10;
-                return nice * Math.pow(10, exponent);
-            }
-
-            // ──────────────────────────────────────
-            // Отрисовка графика
-            // ──────────────────────────────────────
-            function drawChart(ctx, canvas, dataArray, currentTime, yRange, colors, unitLabel) {
-                const width = canvas.width;
-                const height = canvas.height;
-                const plotLeft = PADDING.left;
-                const plotRight = width - PADDING.right;
-                const plotTop = PADDING.top;
-                const plotBottom = height - PADDING.bottom;
-                const plotWidth = plotRight - plotLeft;
-                const plotHeight = plotBottom - plotTop;
-
-                // Очистка
-                ctx.clearRect(0, 0, width, height);
-
-                // Фон области графика
-                ctx.fillStyle = '#0a0e14';
-                ctx.fillRect(plotLeft, plotTop, plotWidth, plotHeight);
-
-                // Сетка (горизонтальные линии)
-                const yMin = yRange.min;
-                const yMax = yRange.max;
-                const ySpan = yMax - yMin;
-                const roughStep = ySpan / 6;
-                const gridStepY = niceNumber(roughStep);
-
-                ctx.strokeStyle = '#1a1f2b';
-                ctx.lineWidth = 0.7;
-                ctx.setLineDash([3, 5]);
-
-                let gridY = Math.ceil(yMin / gridStepY) * gridStepY;
-                while (gridY <= yMax) {
-                    const canvasY = plotBottom - ((gridY - yMin) / ySpan) * plotHeight;
-                    if (canvasY >= plotTop && canvasY <= plotBottom) {
-                        ctx.beginPath();
-                        ctx.moveTo(plotLeft, canvasY);
-                        ctx.lineTo(plotRight, canvasY);
-                        ctx.stroke();
-
-                        // Подписи оси Y
-                        ctx.fillStyle = '#5a6377';
-                        ctx.font = `${9 * DPR}px 'SF Mono', 'JetBrains Mono', 'Consolas', monospace`;
-                        ctx.textAlign = 'right';
-                        ctx.fillText(gridY.toFixed(1), plotLeft - 6, canvasY + 3);
-                    }
-                    gridY += gridStepY;
-                }
-
-                // Вертикальные линии (каждую секунду)
-                ctx.strokeStyle = '#1a1f2b';
-                ctx.setLineDash([3, 5]);
-                for (let sec = 0; sec <= 10; sec++) {
-                    const t = currentTime - sec * 1000;
-                    const canvasX = plotLeft + ((t - (currentTime - WINDOW_MS)) / WINDOW_MS) * plotWidth;
-                    if (canvasX >= plotLeft && canvasX <= plotRight) {
-                        ctx.beginPath();
-                        ctx.moveTo(canvasX, plotTop);
-                        ctx.lineTo(canvasX, plotBottom);
-                        ctx.stroke();
-
-                        // Подписи оси X
-                        ctx.fillStyle = '#5a6377';
-                        ctx.font = `${9 * DPR}px 'SF Mono', 'JetBrains Mono', 'Consolas', monospace`;
-                        ctx.textAlign = 'center';
-                        ctx.fillText(`-${sec}s`, canvasX, plotBottom + 14);
-                    }
-                }
-
-                ctx.setLineDash([]);
-
-                // Обрезка области графика
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(plotLeft, plotTop, plotWidth, plotHeight);
-                ctx.clip();
-
-                // Отрисовка линий данных
-                const channels = [
-                    { key: 'x', color: colors.x, glow: colors.glowX },
-                    { key: 'y', color: colors.y, glow: colors.glowY },
-                    { key: 'z', color: colors.z, glow: colors.glowZ },
-                ];
-
-                const cutoff = currentTime - WINDOW_MS;
-
-                for (const ch of channels) {
-                    if (dataArray.length < 2) continue;
-
-                    // Находим индексы видимых данных
-                    let startIdx = 0;
-                    for (let i = dataArray.length - 1; i >= 0; i--) {
-                        if (dataArray[i].time < cutoff) {
-                            startIdx = i + 1;
-                            break;
-                        }
-                    }
-                    const visible = dataArray.slice(startIdx);
-                    if (visible.length < 2) continue;
-
-                    // Свечение
-                    ctx.strokeStyle = ch.glow;
-                    ctx.lineWidth = 4 * DPR;
-                    ctx.lineCap = 'round';
-                    ctx.lineJoin = 'round';
-                    ctx.shadowColor = ch.glow;
-                    ctx.shadowBlur = 8 * DPR;
-                    ctx.beginPath();
-                    const firstPt = visible[0];
-                    let cx = plotLeft + ((firstPt.time - (currentTime - WINDOW_MS)) / WINDOW_MS) * plotWidth;
-                    let cy = plotBottom - ((firstPt[ch.key] - yMin) / ySpan) * plotHeight;
-                    ctx.moveTo(cx, cy);
-                    for (let i = 1; i < visible.length; i++) {
-                        const pt = visible[i];
-                        cx = plotLeft + ((pt.time - (currentTime - WINDOW_MS)) / WINDOW_MS) * plotWidth;
-                        cy = plotBottom - ((pt[ch.key] - yMin) / ySpan) * plotHeight;
-                        ctx.lineTo(cx, cy);
-                    }
-                    ctx.stroke();
-                    ctx.shadowBlur = 0;
-
-                    // Основная линия
-                    ctx.strokeStyle = ch.color;
-                    ctx.lineWidth = 1.6 * DPR;
-                    ctx.beginPath();
-                    const fPt = visible[0];
-                    cx = plotLeft + ((fPt.time - (currentTime - WINDOW_MS)) / WINDOW_MS) * plotWidth;
-                    cy = plotBottom - ((fPt[ch.key] - yMin) / ySpan) * plotHeight;
-                    ctx.moveTo(cx, cy);
-                    for (let i = 1; i < visible.length; i++) {
-                        const pt = visible[i];
-                        cx = plotLeft + ((pt.time - (currentTime - WINDOW_MS)) / WINDOW_MS) * plotWidth;
-                        cy = plotBottom - ((pt[ch.key] - yMin) / ySpan) * plotHeight;
-                        ctx.lineTo(cx, cy);
-                    }
-                    ctx.stroke();
-                }
-
-                ctx.restore();
-
-                // Рамка графика
-                ctx.strokeStyle = '#30363d';
-                ctx.lineWidth = 1;
-                ctx.setLineDash([]);
-                ctx.strokeRect(plotLeft, plotTop, plotWidth, plotHeight);
-
-                // Метка единиц измерения
-                ctx.fillStyle = '#5a6377';
-                ctx.font = `${8 * DPR}px 'SF Mono', 'JetBrains Mono', 'Consolas', monospace`;
-                ctx.textAlign = 'left';
-                ctx.fillText(unitLabel, plotLeft + 4, plotTop - 6);
-            }
-
-            // ──────────────────────────────────────
-            // Основной цикл рендеринга
-            // ──────────────────────────────────────
-            function render(timestamp) {
-                if (!isRunning && !isDemoMode) {
-                    animFrameId = requestAnimationFrame(render);
-                    return;
-                }
-
-                const currentTime = isDemoMode ? (timestamp - demoStartTime) : now();
-                // В демо-режиме используем монотонно растущее время
-                const renderTime = isDemoMode ? timestamp : now();
-
-                // Периодическая очистка старых данных
-                if (renderTime - lastPruneTime > PRUNE_INTERVAL_MS) {
-                    pruneData(accelData, renderTime);
-                    pruneData(gyroData, renderTime);
-                    lastPruneTime = renderTime;
-                }
-
-                // Вычисляем диапазоны Y
-                const accelYRange = computeYRange(accelData, renderTime, 20); // мин. диапазон ~20 м/с²
-                const gyroYRange = computeYRange(gyroData, renderTime, 200); // мин. диапазон ~200 °/с
-
-                // Цвета для акселерометра
-                const accelColors = {
-                    x: '#ff6b6b',
-                    y: '#51cf66',
-                    z: '#339af0',
-                    glowX: 'rgba(255,107,107,0.45)',
-                    glowY: 'rgba(81,207,102,0.45)',
-                    glowZ: 'rgba(51,154,240,0.45)',
-                };
-
-                // Цвета для гироскопа
-                const gyroColors = {
-                    x: '#ff6b6b',
-                    y: '#51cf66',
-                    z: '#339af0',
-                    glowX: 'rgba(255,107,107,0.45)',
-                    glowY: 'rgba(81,207,102,0.45)',
-                    glowZ: 'rgba(51,154,240,0.45)',
-                };
-
-                // Отрисовка
-                drawChart(ctxAccel, canvasAccel, accelData, renderTime, accelYRange, accelColors, 'м/с²');
-                drawChart(ctxGyro, canvasGyro, gyroData, renderTime, gyroYRange, gyroColors, '°/с');
-
-                // Обновление текущих значений
-                updateCurrentValues();
-
-                animFrameId = requestAnimationFrame(render);
-            }
-
-            function updateCurrentValues() {
-                // Акселерометр
-                if (accelData.length > 0) {
-                    const latest = accelData[accelData.length - 1];
-                    accelValuesEl.innerHTML = `
-                        <span>X: <span class="val-x">${latest.x.toFixed(2)}</span></span>
-                        <span>Y: <span class="val-y">${latest.y.toFixed(2)}</span></span>
-                        <span>Z: <span class="val-z">${latest.z.toFixed(2)}</span></span>
-                    `;
-                }
-                // Гироскоп
-                if (gyroData.length > 0) {
-                    const latest = gyroData[gyroData.length - 1];
-                    gyroValuesEl.innerHTML = `
-                        <span>X: <span class="val-x">${latest.x.toFixed(2)}</span></span>
-                        <span>Y: <span class="val-y">${latest.y.toFixed(2)}</span></span>
-                        <span>Z: <span class="val-z">${latest.z.toFixed(2)}</span></span>
-                    `;
-                }
-            }
-
-            // ──────────────────────────────────────
-            // Обработчик событий датчиков
-            // ──────────────────────────────────────
-            function handleDeviceMotion(event) {
-                if (!isRunning) return;
-                const t = now();
-
-                // Акселерометр (с гравитацией)
-                const accel = event.accelerationIncludingGravity;
-                if (accel && accel.x !== null && accel.y !== null && accel.z !== null) {
-                    accelData.push({ time: t, x: accel.x, y: accel.y, z: accel.z });
-                } else if (event.acceleration && event.acceleration.x !== null) {
-                    // Fallback: используем acceleration без гравитации
-                    const a = event.acceleration;
-                    accelData.push({ time: t, x: a.x, y: a.y, z: a.z });
-                }
-
-                // Гироскоп (скорость вращения)
-                const rot = event.rotationRate;
-                if (rot && rot.beta !== null && rot.gamma !== null && rot.alpha !== null) {
-                    // beta -> вращение вокруг X, gamma -> вокруг Y, alpha -> вокруг Z
-                    gyroData.push({ time: t, x: rot.beta, y: rot.gamma, z: rot.alpha });
-                } else if (rot && rot.x !== undefined) {
-                    // Некоторые браузеры дают x,y,z напрямую
-                    gyroData.push({ time: t, x: rot.x, y: rot.y, z: rot.z });
-                }
-
-                // Периодическая очистка
-                if (t - lastPruneTime > PRUNE_INTERVAL_MS) {
-                    pruneData(accelData, t);
-                    pruneData(gyroData, t);
-                    lastPruneTime = t;
-                }
-            }
-
-            // ──────────────────────────────────────
-            // Демо-режим (симулированные данные)
-            // ──────────────────────────────────────
-            let demoDataInterval = null;
-
-            function generateDemoData() {
-                const t = performance.now();
-                const elapsed = (t - demoStartTime) / 1000; // секунды с начала демо
-
-                // Симулируем реалистичные IMU данные
-                // Акселерометр: гравитация + небольшие колебания + иногда "толчок"
-                const baseAccelX = Math.sin(elapsed * 0.7) * 1.5 + Math.sin(elapsed * 3.1) * 0.4;
-                const baseAccelY = Math.cos(elapsed * 0.6) * 1.2 + Math.sin(elapsed * 2.7) * 0.5;
-                const baseAccelZ = 9.8 + Math.sin(elapsed * 1.3) * 2.0 + Math.cos(elapsed * 4.1) * 0.6;
-
-                // Добавляем случайный "толчок" каждые ~4 секунды
-                const jolt = (Math.sin(elapsed * 1.57) > 0.92) ? (Math.random() - 0.5) * 15 : 0;
-
-                accelData.push({
-                    time: t,
-                    x: baseAccelX + jolt + (Math.random() - 0.5) * 0.3,
-                    y: baseAccelY + (Math.random() - 0.5) * 0.3,
-                    z: baseAccelZ + (Math.random() - 0.5) * 0.3,
-                });
-
-                // Гироскоп: имитация вращений
-                const baseGyroX = Math.sin(elapsed * 1.1) * 40 + Math.sin(elapsed * 5.3) * 15;
-                const baseGyroY = Math.cos(elapsed * 0.9) * 35 + Math.sin(elapsed * 4.7) * 20;
-                const baseGyroZ = Math.sin(elapsed * 1.5) * 25 + Math.cos(elapsed * 3.3) * 18;
-
-                gyroData.push({
-                    time: t,
-                    x: baseGyroX + (Math.random() - 0.5) * 5,
-                    y: baseGyroY + (Math.random() - 0.5) * 5,
-                    z: baseGyroZ + (Math.random() - 0.5) * 5,
-                });
-
-                // Очистка
-                if (t - lastPruneTime > PRUNE_INTERVAL_MS) {
-                    pruneData(accelData, t);
-                    pruneData(gyroData, t);
-                    lastPruneTime = t;
-                }
-            }
-
-            function startDemoMode() {
-                stopSensors();
-                isDemoMode = true;
-                isRunning = false;
-                demoStartTime = performance.now();
-                accelData = [];
-                gyroData = [];
-                lastPruneTime = performance.now();
-
-                // Генерируем начальные данные за последние 10 секунд
-                const startT = performance.now();
-                for (let i = -200; i <= 0; i++) {
-                    const simT = startT + i * 16; // ~60Hz
-                    const elapsed = (simT - demoStartTime) / 1000;
-                    const baseAccelX = Math.sin(elapsed * 0.7) * 1.5 + Math.sin(elapsed * 3.1) * 0.4;
-                    const baseAccelY = Math.cos(elapsed * 0.6) * 1.2 + Math.sin(elapsed * 2.7) * 0.5;
-                    const baseAccelZ = 9.8 + Math.sin(elapsed * 1.3) * 2.0 + Math.cos(elapsed * 4.1) * 0.6;
-                    accelData.push({
-                        time: simT,
-                        x: baseAccelX + (Math.random() - 0.5) * 0.3,
-                        y: baseAccelY + (Math.random() - 0.5) * 0.3,
-                        z: baseAccelZ + (Math.random() - 0.5) * 0.3,
-                    });
-                    const baseGyroX = Math.sin(elapsed * 1.1) * 40 + Math.sin(elapsed * 5.3) * 15;
-                    const baseGyroY = Math.cos(elapsed * 0.9) * 35 + Math.sin(elapsed * 4.7) * 20;
-                    const baseGyroZ = Math.sin(elapsed * 1.5) * 25 + Math.cos(elapsed * 3.3) * 18;
-                    gyroData.push({
-                        time: simT,
-                        x: baseGyroX + (Math.random() - 0.5) * 5,
-                        y: baseGyroY + (Math.random() - 0.5) * 5,
-                        z: baseGyroZ + (Math.random() - 0.5) * 5,
-                    });
-                }
-
-                demoDataInterval = setInterval(generateDemoData, 16); // ~60Hz
-
-                updateUIForDemo();
-                noSensorsMsg.classList.remove('visible');
-            }
-
-            function stopDemoMode() {
-                isDemoMode = false;
-                if (demoDataInterval) {
-                    clearInterval(demoDataInterval);
-                    demoDataInterval = null;
-                }
-                accelData = [];
-                gyroData = [];
-                updateUIForStop();
-            }
-
-            // ──────────────────────────────────────
-            // Запуск / остановка реальных датчиков
-            // ──────────────────────────────────────
-            function startSensors() {
-                if (isDemoMode) {
-                    stopDemoMode();
-                }
-                isRunning = true;
-                window.addEventListener('devicemotion', handleDeviceMotion, { passive: true });
-                accelData = [];
-                gyroData = [];
-                lastPruneTime = now();
-                updateUIForRunning();
-                noSensorsMsg.classList.remove('visible');
-            }
-
-            function stopSensors() {
-                isRunning = false;
-                window.removeEventListener('devicemotion', handleDeviceMotion);
-                if (!isDemoMode) {
-                    updateUIForStop();
-                }
-            }
-
-            // ──────────────────────────────────────
-            // Проверка поддержки датчиков
-            // ──────────────────────────────────────
-            function checkSensorSupport() {
-                // Проверяем через DeviceMotionEvent
-                const hasDeviceMotion = 'DeviceMotionEvent' in window;
-                // На iOS 13+ нужен запрос разрешения
-                const needsPermission = typeof DeviceMotionEvent !== 'undefined' &&
-                    typeof DeviceMotionEvent.requestPermission === 'function';
-
-                if (!hasDeviceMotion) {
-                    noSensorsMsg.classList.add('visible');
-                    return false;
-                }
-                return true;
-            }
-
-            // ──────────────────────────────────────
-            // Обработчик кнопки Старт
-            // ──────────────────────────────────────
-            async function handleStartClick() {
-                if (isRunning) {
-                    // Остановка
-                    stopSensors();
-                    btnStart.textContent = '▶ Запустить';
-                    btnStart.classList.remove('btn-primary');
-                    btnStart.classList.add('btn-outline');
-                    return;
-                }
-                if (isDemoMode) {
-                    stopDemoMode();
-                    btnStart.textContent = '▶ Запустить';
-                    btnStart.classList.remove('btn-primary');
-                    btnStart.classList.add('btn-outline');
-                    btnDemo.textContent = '🎭 Демо';
-                    updateUIForStop();
-                    return;
-                }
-
-                // Проверка поддержки
-                const supported = checkSensorSupport();
-                if (!supported) {
-                    // Предлагаем демо-режим
-                    noSensorsMsg.classList.add('visible');
-                    noSensorsMsg.innerHTML =
-                        '⚠️ Датчики IMU не обнаружены.<br><span style="font-size:0.7rem;">Нажмите "🎭 Демо" для симуляции.</span>';
-                    return;
-                }
-
-                // iOS 13+: запрос разрешения
-                if (typeof DeviceMotionEvent !== 'undefined' &&
-                    typeof DeviceMotionEvent.requestPermission === 'function') {
-                    try {
-                        btnStart.textContent = '⏳ Запрос...';
-                        btnStart.disabled = true;
-                        const permission = await DeviceMotionEvent.requestPermission();
-                        if (permission === 'granted') {
-                            startSensors();
-                            btnStart.textContent = '⏹ Остановить';
-                            btnStart.classList.add('btn-primary');
-                            btnStart.classList.remove('btn-outline');
-                        } else {
-                            alert('Разрешение на доступ к датчикам отклонено.');
-                            btnStart.textContent = '▶ Запустить';
-                            updateUIForStop();
-                        }
-                    } catch (err) {
-                        console.error('Ошибка запроса разрешения:', err);
-                        alert('Не удалось получить доступ к датчикам.');
-                        btnStart.textContent = '▶ Запустить';
-                        updateUIForStop();
-                    } finally {
-                        btnStart.disabled = false;
-                    }
-                } else {
-                    // Android / другие платформы
-                    startSensors();
-                    btnStart.textContent = '⏹ Остановить';
-                    btnStart.classList.add('btn-primary');
-                    btnStart.classList.remove('btn-outline');
-                }
-            }
-
-            function handleDemoClick() {
-                if (isDemoMode) {
-                    stopDemoMode();
-                    btnDemo.textContent = '🎭 Демо';
-                    btnStart.textContent = '▶ Запустить';
-                    btnStart.classList.remove('btn-primary');
-                    btnStart.classList.add('btn-outline');
-                    updateUIForStop();
-                    if (!checkSensorSupport()) {
-                        noSensorsMsg.classList.add('visible');
-                        noSensorsMsg.innerHTML =
-                        '⚠️ Датчики IMU не обнаружены.<br><span style="font-size:0.7rem;">Нажмите "🎭 Демо" для симуляции.</span>';
-                    }
-                } else {
-                    if (isRunning) stopSensors();
-                    startDemoMode();
-                    btnDemo.textContent = '🎭 Демо (активен)';
-                    btnStart.textContent = '⏹ Остановить';
-                    btnStart.classList.add('btn-outline');
-                    btnStart.classList.remove('btn-primary');
-                }
-            }
-
-            // ──────────────────────────────────────
-            // Обновление UI
-            // ──────────────────────────────────────
-            function updateUIForRunning() {
-                statusDot.classList.remove('inactive', 'demo');
-                statusBadge.textContent = 'Активен';
-                statusBadge.classList.remove('waiting', 'demo-mode');
-                statusBadge.style.background = '#1a3a1a';
-                statusBadge.style.color = '#4ade80';
-                statusBadge.style.borderColor = '#2d5a2d';
-            }
-
-            function updateUIForDemo() {
-                statusDot.classList.remove('inactive');
-                statusDot.classList.add('demo');
-                statusBadge.textContent = 'Демо';
-                statusBadge.classList.remove('waiting');
-                statusBadge.classList.add('demo-mode');
-                statusBadge.style.background = '#2e1f0a';
-                statusBadge.style.color = '#f0a500';
-                statusBadge.style.borderColor = '#5a3e0a';
-            }
-
-            function updateUIForStop() {
-                statusDot.classList.add('inactive');
-                statusDot.classList.remove('demo');
-                statusBadge.textContent = 'Ожидание';
-                statusBadge.classList.add('waiting');
-                statusBadge.classList.remove('demo-mode');
-                statusBadge.style.background = '#1a1a2e';
-                statusBadge.style.color = '#8b949e';
-                statusBadge.style.borderColor = '#30363d';
-                accelValuesEl.innerHTML = `
-                    <span>X: <span class="val-x">--</span></span>
-                    <span>Y: <span class="val-y">--</span></span>
-                    <span>Z: <span class="val-z">--</span></span>
-                `;
-                gyroValuesEl.innerHTML = `
-                    <span>X: <span class="val-x">--</span></span>
-                    <span>Y: <span class="val-y">--</span></span>
-                    <span>Z: <span class="val-z">--</span></span>
-                `;
-            }
-
-            // ──────────────────────────────────────
-            // Настройка размеров canvas
-            // ──────────────────────────────────────
-            function resizeCanvas(canvas, ctx) {
-                const container = canvas.parentElement;
-                const cssWidth = container.clientWidth - 12;
-                const cssHeight = canvas.getAttribute('height') || 220;
-                canvas.style.width = cssWidth + 'px';
-                canvas.style.height = cssHeight + 'px';
-                canvas.width = Math.floor(cssWidth * DPR);
-                canvas.height = Math.floor(cssHeight * DPR);
-                ctx.setTransform(1, 0, 0, 1, 0, 0);
-                ctx.scale(DPR, DPR);
-            }
-
-            function resizeAllCanvases() {
-                resizeCanvas(canvasAccel, ctxAccel);
-                resizeCanvas(canvasGyro, ctxGyro);
-            }
-
-            // ──────────────────────────────────────
-            // Инициализация
-            // ──────────────────────────────────────
-            function init() {
-                resizeAllCanvases();
-                window.addEventListener('resize', () => {
-                    resizeAllCanvases();
-                });
-
-                // Используем ResizeObserver для более точного отслеживания
-                if (window.ResizeObserver) {
-                    const observer = new ResizeObserver(() => {
-                        resizeAllCanvases();
-                    });
-                    observer.observe(canvasAccel.parentElement);
-                    observer.observe(canvasGyro.parentElement);
-                }
-
-                btnStart.addEventListener('click', handleStartClick);
-                btnDemo.addEventListener('click', handleDemoClick);
-
-                // Первичная проверка датчиков
-                const supported = checkSensorSupport();
-                if (!supported) {
-                    noSensorsMsg.classList.add('visible');
-                    noSensorsMsg.innerHTML =
-                        '⚠️ Датчики IMU не обнаружены на этом устройстве.<br><span style="font-size:0.7rem;">Попробуйте открыть на смартфоне или нажмите "🎭 Демо".</span>';
-                }
-
-                // Запуск цикла рендеринга
-                animFrameId = requestAnimationFrame(render);
-
-                console.log('IMU Monitor инициализирован.');
-                console.log('Поддержка DeviceMotion:', 'DeviceMotionEvent' in window);
-                console.log('Требуется разрешение (iOS):',
-                    typeof DeviceMotionEvent !== 'undefined' &&
-                    typeof DeviceMotionEvent.requestPermission === 'function');
-                console.log('DPR:', DPR);
-            }
-
-            // Запуск
-            init();
-        })();
-    </script>
+  <div class="panel">
+    <canvas id="accel"></canvas>
+  </div>
+
+  <div class="panel">
+    <canvas id="gyro"></canvas>
+  </div>
+
+</div>
+
+<script>
+(() => {
+
+const WINDOW = 10000;
+
+const accel = [];
+const gyro = [];
+
+let running = false;
+let demo = false;
+
+let demoStart = 0;
+
+const cAccel = document.getElementById("accel");
+const cGyro = document.getElementById("gyro");
+
+const ctxA = cAccel.getContext("2d");
+const ctxG = cGyro.getContext("2d");
+
+function now(){
+  return performance.now();
+}
+
+/* ---------- DATA ---------- */
+
+function pushAccel(t,x,y,z){
+  accel.push({t,x,y,z});
+  trim(accel,t);
+}
+
+function pushGyro(t,x,y,z){
+  gyro.push({t,x,y,z});
+  trim(gyro,t);
+}
+
+function trim(arr,t){
+  const cut = t - WINDOW;
+  while(arr.length && arr[0].t < cut){
+    arr.shift();
+  }
+}
+
+/* ---------- SENSOR ---------- */
+
+function onMotion(e){
+  if(!running) return;
+
+  const t = now();
+
+  const a = e.accelerationIncludingGravity;
+  const r = e.rotationRate;
+
+  if(a){
+    pushAccel(t, a.x||0, a.y||0, a.z||0);
+  }
+
+  if(r){
+    pushGyro(t, r.beta||0, r.gamma||0, r.alpha||0);
+  }
+}
+
+/* ---------- DEMO ---------- */
+
+function demoTick(){
+  const t = now();
+  const e = (t - demoStart)/1000;
+
+  pushAccel(
+    t,
+    Math.sin(e)*2,
+    Math.cos(e*0.7)*2,
+    9.8 + Math.sin(e*0.3)*1.5
+  );
+
+  pushGyro(
+    t,
+    Math.sin(e*1.3)*40,
+    Math.cos(e*1.1)*40,
+    Math.sin(e*0.9)*30
+  );
+}
+
+/* ---------- DRAW ---------- */
+
+function draw(ctx, data, color){
+  const w = cAccel.width;
+  const h = cAccel.height;
+
+  ctx.clearRect(0,0,w,h);
+
+  if(data.length < 2) return;
+
+  const t = now();
+  const minT = t - WINDOW;
+
+  let min = Infinity;
+  let max = -Infinity;
+
+  for(const p of data){
+    min = Math.min(min,p.x,p.y,p.z);
+    max = Math.max(max,p.x,p.y,p.z);
+  }
+
+  const pad = (max-min)*0.2 || 1;
+  min -= pad;
+  max += pad;
+
+  const sx = w / WINDOW;
+  const sy = h / (max-min);
+
+  function plot(key, stroke){
+    ctx.beginPath();
+    ctx.strokeStyle = stroke;
+
+    let started = false;
+
+    for(const p of data){
+      if(p.t < minT) continue;
+
+      const x = (p.t - minT) * sx;
+      const y = h - (p[key] - min) * sy;
+
+      if(!started){
+        ctx.moveTo(x,y);
+        started = true;
+      } else {
+        ctx.lineTo(x,y);
+      }
+    }
+
+    ctx.stroke();
+  }
+
+  plot("x","red");
+  plot("y","green");
+  plot("z","cyan");
+}
+
+/* ---------- LOOP ---------- */
+
+function loop(){
+  const t = now();
+
+  if(demo){
+    demoTick();
+  }
+
+  draw(ctxA, accel);
+  draw(ctxG, gyro);
+
+  requestAnimationFrame(loop);
+}
+
+/* ---------- UI ---------- */
+
+document.getElementById("start").onclick = async () => {
+  running = !running;
+
+  if(running){
+    accel.length = 0;
+    gyro.length = 0;
+
+    try{
+      if(DeviceMotionEvent?.requestPermission){
+        await DeviceMotionEvent.requestPermission();
+      }
+    }catch(e){}
+
+    window.addEventListener("devicemotion", onMotion);
+  } else {
+    window.removeEventListener("devicemotion", onMotion);
+  }
+};
+
+document.getElementById("demo").onclick = () => {
+  demo = !demo;
+  demoStart = now();
+
+  accel.length = 0;
+  gyro.length = 0;
+};
+
+loop();
+
+})();
+</script>
 </body>
 </html>
