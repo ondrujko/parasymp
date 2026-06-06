@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Ровное дыхание — IMU Biofeedback (гироскоп Z)</title>
+  <title>Ровное дыхание — IMU Biofeedback (гироскоп Z, фикс)</title>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
     html,body { width:100%; height:100%; overflow:hidden; background:#000; font-family:system-ui,sans-serif; }
@@ -35,7 +35,7 @@
 
   <script>
     (()=>{
-      // DOM элементы
+      // DOM
       const canvas = document.getElementById('canvas');
       const ctx = canvas.getContext('2d', { alpha: true });
       const startBtn = document.getElementById('start-btn');
@@ -45,7 +45,7 @@
       const gainUpBtn = document.getElementById('gain-up');
       const gainDownBtn = document.getElementById('gain-down');
 
-      // Визуализация
+      // Визуализация колец
       const RINGS = [
         { count:28, rMin:55, rMax:110, dMin:6, dMax:10, rot:0.20 },
         { count:32, rMin:85, rMax:165, dMin:7, dMax:10, rot:0.10 },
@@ -65,9 +65,9 @@
 
       // Сигнал
       let sensorActive = false;
-      let signalGain = 1.0;         // усиление для гироскопа (обычно 1-3 достаточно)
+      let signalGain = 1.0;
 
-      // Буфер сырых данных для автокорреляции (5 секунд при ~50 Гц)
+      // Буфер для автокорреляции (5 секунд, ~50 Гц)
       const RAW_BUF_LEN = 256;
       let rawBuffer = new Float32Array(RAW_BUF_LEN);
       let rawBufIdx = 0, rawBufFull = false;
@@ -76,8 +76,9 @@
       const MAX_PERIODS = 8;
       let periodEstimates = [];
       let currentPeriodMs = 4000;
+      let lastValidPeriodMs = 0; // чтобы анимация не скакала
 
-      // Фильтр для визуализации дыхания (лёгкий bandpass)
+      // Фильтр для визуализации дыхания
       class SimpleBandpass {
         constructor() { this.fast = 0; this.slow = 0; this.init = false; }
         process(x, dtMs) {
@@ -92,10 +93,9 @@
       }
       const bandpass = new SimpleBandpass();
 
-      // Время для dt
       let prevRawTime = 0;
 
-      // Усиление
+      // Управление усилением
       gainUpBtn.addEventListener('click', ()=> { signalGain = Math.min(5.0, signalGain+0.2); });
       gainDownBtn.addEventListener('click', ()=> { signalGain = Math.max(0.2, signalGain-0.2); });
 
@@ -136,17 +136,22 @@
       }
       window.addEventListener('resize', resize);
 
-      // Автокорреляция для поиска периода дыхания в буфере
+      // Автокорреляция с проверкой качества
       function computePeriodFromBuffer(buf, length, fsEstimate) {
-        const minLag = Math.floor(fsEstimate * 1.0);
-        const maxLag = Math.min(length-1, Math.floor(fsEstimate * 10.0));
-        if (minLag >= maxLag) return 4000;
+        const minLag = Math.floor(fsEstimate * 1.0);   // 1 сек
+        const maxLag = Math.min(length-1, Math.floor(fsEstimate * 10.0)); // 10 сек
+        if (minLag >= maxLag) return 0;
 
+        // Среднее и дисперсия
         let sum = 0;
         for (let i=0; i<length; i++) sum += buf[i];
         const mean = sum / length;
+        let totalVar = 0;
+        for (let i=0; i<length; i++) totalVar += (buf[i] - mean) ** 2;
+        if (totalVar === 0) return 0;
 
-        let bestLag = minLag, bestCorr = -Infinity;
+        let bestLag = minLag;
+        let bestCorr = -Infinity;
         for (let lag = minLag; lag <= maxLag; lag++) {
           let corr = 0;
           for (let i=0; i<length-lag; i++) {
@@ -157,22 +162,22 @@
             bestLag = lag;
           }
         }
-        return bestLag / fsEstimate * 1000; // в мс
+
+        // Нормированный коэффициент автокорреляции
+        const normCorr = bestCorr / totalVar;
+        if (normCorr < 0.2) return 0; // слишком слабая корреляция — не добавляем
+
+        return bestLag / fsEstimate * 1000; // период в мс
       }
 
-      // Обработка нового значения гироскопа
       function processMotion(gz, ts) {
         if (!isFinite(gz)) return;
-
-        // Усиление
         const amplified = gz * signalGain;
 
-        // Добавляем в сырой буфер
         rawBuffer[rawBufIdx % RAW_BUF_LEN] = amplified;
         rawBufIdx++;
         if (rawBufIdx >= RAW_BUF_LEN && !rawBufFull) rawBufFull = true;
 
-        // Для графика дыхания – фильтруем
         const dtMs = prevRawTime ? Math.max(1, ts - prevRawTime) : 20;
         prevRawTime = ts;
         const filtered = bandpass.process(amplified, dtMs);
@@ -180,36 +185,33 @@
         graphIdx++;
         if (graphIdx >= BREATH_HIST && !graphFull) graphFull = true;
 
-        // Периодически оцениваем период (каждые 10 новых отсчётов)
+        // Оценка периода каждые 10 новых отсчётов
         if (rawBufFull && rawBufIdx % 10 === 0) {
           const ordered = new Float32Array(RAW_BUF_LEN);
           const start = rawBufIdx % RAW_BUF_LEN;
           for (let i=0; i<RAW_BUF_LEN; i++) {
             ordered[i] = rawBuffer[(start + i) % RAW_BUF_LEN];
           }
-          const fs = 50; // приблизительная частота событий
+          const fs = 50;
           const periodMs = computePeriodFromBuffer(ordered, RAW_BUF_LEN, fs);
           if (periodMs >= 1000 && periodMs <= 10000) {
             periodEstimates.push(periodMs);
             if (periodEstimates.length > MAX_PERIODS) periodEstimates.shift();
-            if (periodEstimates.length >= 2) {
-              currentPeriodMs = periodEstimates.reduce((a,b)=>a+b,0) / periodEstimates.length;
-            } else {
-              currentPeriodMs = periodMs;
-            }
+            lastValidPeriodMs = periodEstimates.reduce((a,b)=>a+b,0) / periodEstimates.length;
           }
+        }
+        // Обновляем текущий период, даже если новых оценок нет — сглаживаем
+        if (lastValidPeriodMs > 0) {
+          currentPeriodMs += (lastValidPeriodMs - currentPeriodMs) * 0.1;
         }
       }
 
       function onDeviceMotion(e) {
-        // Берём ось Z гироскопа
         const r = e.rotationRate;
         if (!r) return;
-        const gz = typeof r.z === 'number' ? r.z : 0;
-        processMotion(gz, performance.now());
+        processMotion(r.z ?? 0, performance.now());
       }
 
-      // Стабильность по вариабельности оценок периода
       function computeStability() {
         if (periodEstimates.length < 3) return 0;
         const mean = periodEstimates.reduce((a,b)=>a+b,0) / periodEstimates.length;
@@ -238,7 +240,7 @@
         sensorActive = false;
         startBtn.textContent = 'СТАРТ';
         rawBufIdx = 0; rawBufFull = false; rawBuffer.fill(0);
-        periodEstimates = []; currentPeriodMs = 4000;
+        periodEstimates = []; currentPeriodMs = 4000; lastValidPeriodMs = 0;
         bandpass.reset();
         graphIdx = 0; graphFull = false; breathGraph.fill(0);
         prevRawTime = 0;
@@ -257,6 +259,7 @@
         const w = window.innerWidth, h = window.innerHeight;
         ctx.clearRect(0,0,w,h);
 
+        // Обновление стабильности (FPS-независимо)
         const rawStab = computeStability();
         targetStability = rawStab;
         const alphaSmooth = 1 - Math.exp(-dt/600);
@@ -265,6 +268,7 @@
         stabilityText.textContent = `СТАБИЛЬНОСТЬ ${stabPercent}%`;
         stabilityFill.style.width = `${stabPercent}%`;
 
+        // Период для анимации дыхания
         const periodAnim = currentPeriodMs || 4000;
         breathPhase += (2*Math.PI) * (dt/periodAnim);
         breathPhase %= (2*Math.PI);
@@ -272,26 +276,36 @@
         const eased = smoothstep(breath);
         const rotFactor = currentStability;
 
-        const cx = w*0.5, cy = h*0.38;
+        const cx = w * 0.5, cy = h * 0.38;
+        const aspectRatio = w / h; // компенсация вытянутости экрана
 
+        // Точки
         for (let i=0; i<points.length; i++) {
           const p = points[i];
           const ring = RINGS[p.ring];
           const ch = chaosOffsets[i];
-          const angle = p.ang + simTime*0.00015*ring.rot*rotFactor;
-          const radius = p.rMin + (p.rMax-p.rMin)*eased;
-          const ix = cx + Math.cos(angle)*radius;
-          const iy = cy + Math.sin(angle)*radius;
-          const dx = Math.sin(simTime*0.0005+ch.ph)*20*ch.dx;
-          const dy = Math.cos(simTime*0.0007+ch.ph)*20*ch.dy;
-          const chX = clamp(ch.bx+dx,0,w), chY = clamp(ch.by+dy,0,h);
-          const x = chX + (ix-chX)*currentStability;
-          const y = chY + (iy-chY)*currentStability;
-          const isize = p.dMin + (p.dMax-p.dMin)*eased;
-          const size = p.jit + (isize-p.jit)*currentStability;
-          const alpha = 0.3+0.7*currentStability;
-          const glow = size*2*currentStability;
-          ctx.beginPath(); ctx.arc(x,y,size,0,2*Math.PI);
+
+          const angle = p.ang + simTime * 0.00015 * ring.rot * rotFactor;
+          const radius = p.rMin + (p.rMax - p.rMin) * eased;
+          // Идеальная позиция с учётом aspect ratio, чтобы кольца были круглыми
+          const ix = cx + Math.cos(angle) * radius;
+          const iy = cy + Math.sin(angle) * radius * aspectRatio;
+
+          const dx = Math.sin(simTime*0.0005 + ch.ph) * 20 * ch.dx;
+          const dy = Math.cos(simTime*0.0007 + ch.ph) * 20 * ch.dy;
+          const chX = clamp(ch.bx + dx, 0, w);
+          const chY = clamp(ch.by + dy, 0, h);
+
+          const x = chX + (ix - chX) * currentStability;
+          const y = chY + (iy - chY) * currentStability;
+
+          const idealSize = p.dMin + (p.dMax - p.dMin) * eased;
+          const size = p.jit + (idealSize - p.jit) * currentStability;
+          const alpha = 0.3 + 0.7 * currentStability;
+          const glow = size * 2 * currentStability;
+
+          ctx.beginPath();
+          ctx.arc(x, y, size, 0, 2*Math.PI);
           ctx.fillStyle = `rgba(255,255,255,${alpha})`;
           ctx.shadowColor = `rgba(255,255,255,${alpha*0.5})`;
           ctx.shadowBlur = glow;
@@ -300,36 +314,41 @@
         ctx.shadowBlur = 0;
 
         // График дыхания
-        const gy = h*0.82, gh = 60, gx=20, gw=w-40;
-        ctx.fillStyle='rgba(0,0,0,0.3)';
-        ctx.fillRect(gx-5,gy-gh/2-5,gw+10,gh+10);
-        ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1;
-        ctx.beginPath(); ctx.moveTo(gx,gy); ctx.lineTo(gx+gw,gy); ctx.stroke();
+        const gy = h * 0.82, gh = 60, gx = 20, gw = w - 40;
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(gx-5, gy-gh/2-5, gw+10, gh+10);
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx+gw, gy); ctx.stroke();
 
         const cnt = graphFull ? BREATH_HIST : graphIdx;
-        if(cnt>1) {
-          ctx.strokeStyle='rgba(255,255,255,0.8)'; ctx.lineWidth=2;
+        if (cnt > 1) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+          ctx.lineWidth = 2;
           ctx.beginPath();
           const start = graphFull ? graphIdx : 0;
-          const step = Math.max(1, Math.floor(cnt/gw));
-          for(let i=0; i<cnt-1; i+=step) {
-            const i1=(start+i)%BREATH_HIST, i2=(start+i+step)%BREATH_HIST;
-            const v1=breathGraph[i1], v2=breathGraph[i2];
-            const x1=gx+(i/(cnt-1))*gw, x2=gx+((i+step)/(cnt-1))*gw;
-            ctx.moveTo(x1, gy-v1*15);
-            ctx.lineTo(x2, gy-v2*15);
+          const step = Math.max(1, Math.floor(cnt / gw));
+          for (let i=0; i < cnt-1; i += step) {
+            const i1 = (start + i) % BREATH_HIST;
+            const i2 = (start + i + step) % BREATH_HIST;
+            const v1 = breathGraph[i1], v2 = breathGraph[i2];
+            const x1 = gx + (i/(cnt-1)) * gw;
+            const x2 = gx + ((i+step)/(cnt-1)) * gw;
+            ctx.moveTo(x1, gy - v1 * 15);
+            ctx.lineTo(x2, gy - v2 * 15);
           }
           ctx.stroke();
         }
 
+        // Отладка
         const periodSec = currentPeriodMs ? (currentPeriodMs/1000).toFixed(1) : '--';
         debugEl.textContent = `Период: ${periodSec}с | Стаб: ${stabPercent}% | Gain: ${signalGain.toFixed(1)}`;
 
         requestAnimationFrame(draw);
       }
 
-      function clamp(v,min,max) { return Math.max(min,Math.min(max,v)); }
-      function smoothstep(t) { return 0.5-0.5*Math.cos(Math.PI*t); }
+      function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+      function smoothstep(t) { return 0.5 - 0.5 * Math.cos(Math.PI * t); }
 
       function init() {
         resize();
