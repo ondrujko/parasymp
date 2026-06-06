@@ -209,6 +209,12 @@ function draw(ctx, canvas, data){
   const sx = w / WINDOW;
   const sy = h / (max-min);
 
+  const colors = {
+    x: "#ff4d4d",
+    y: "#4dff88",
+    z: "#4da3ff"
+  };
+
   function plot(key,color){
     ctx.beginPath();
     ctx.strokeStyle = color;
@@ -224,15 +230,17 @@ function draw(ctx, canvas, data){
       if(!started){
         ctx.moveTo(x,y);
         started = true;
-      } else ctx.lineTo(x,y);
+      } else {
+        ctx.lineTo(x,y);
+      }
     }
 
     ctx.stroke();
   }
 
-  plot("x","var(--x)");
-  plot("y","var(--y)");
-  plot("z","var(--z)");
+  plot("x", colors.x);
+  plot("y", colors.y);
+  plot("z", colors.z);
 }
 
 /* ---------- LOOP ---------- */
