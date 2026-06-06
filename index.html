@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Ровное дыхание — IMU Biofeedback (гироскоп Z, фикс)</title>
+  <title>Ровное дыхание — IMU Biofeedback (гироскоп Z, рабочий)</title>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
     html,body { width:100%; height:100%; overflow:hidden; background:#000; font-family:system-ui,sans-serif; }
@@ -21,7 +21,7 @@
 </head>
 <body>
   <canvas id="canvas"></canvas>
-  <div id="debug">Период: --с | Стаб: 0%</div>
+  <div id="debug">Gyro Z: 0.000 | Период: --с | Стаб: 0%</div>
   <div id="ui">
     <div id="stability-text">СТАБИЛЬНОСТЬ 0%</div>
     <div class="stability-bar"><div id="stability-fill" class="stability-fill"></div></div>
@@ -30,11 +30,11 @@
       <button id="gain-down">Gain −</button>
       <button id="gain-up">Gain +</button>
     </div>
-    <div class="info">Положите телефон на грудь экраном вверх и дышите медленно</div>
+    <div class="info">Телефон на груди экраном вверх. Дышите медленно. Если сигнал слабый — увеличивайте Gain</div>
   </div>
 
   <script>
-    (()=>{
+    (() => {
       // DOM
       const canvas = document.getElementById('canvas');
       const ctx = canvas.getContext('2d', { alpha: true });
@@ -45,7 +45,7 @@
       const gainUpBtn = document.getElementById('gain-up');
       const gainDownBtn = document.getElementById('gain-down');
 
-      // Визуализация колец
+      // Кольца
       const RINGS = [
         { count:28, rMin:55, rMax:110, dMin:6, dMax:10, rot:0.20 },
         { count:32, rMin:85, rMax:165, dMin:7, dMax:10, rot:0.10 },
@@ -65,159 +65,154 @@
 
       // Сигнал
       let sensorActive = false;
-      let signalGain = 1.0;
+      let signalGain = 10.0;               // ★ начинаем с 10, т.к. гироскоп даёт малые значения
+      let rawGyroZ = 0;
 
-      // Буфер для автокорреляции (5 секунд, ~50 Гц)
-      const RAW_BUF_LEN = 256;
-      let rawBuffer = new Float32Array(RAW_BUF_LEN);
-      let rawBufIdx = 0, rawBufFull = false;
-
-      // Оценка периода
-      const MAX_PERIODS = 8;
-      let periodEstimates = [];
-      let currentPeriodMs = 4000;
-      let lastValidPeriodMs = 0; // чтобы анимация не скакала
-
-      // Фильтр для визуализации дыхания
-      class SimpleBandpass {
-        constructor() { this.fast = 0; this.slow = 0; this.init = false; }
-        process(x, dtMs) {
-          if(!this.init) { this.fast = this.slow = x; this.init = true; return 0; }
-          const aFast = Math.min(1, dtMs/1000 / 0.22);
-          const aSlow = Math.min(1, dtMs/1000 / 1.8);
-          this.fast += aFast * (x - this.fast);
-          this.slow += aSlow * (x - this.slow);
-          return this.fast - this.slow;
+      // Реальный dt и фильтр
+      class BiquadBandpass {
+        constructor() {
+          // коэффициенты будут пересчитываться динамически
+          this.x1 = this.x2 = this.y1 = this.y2 = 0;
+          this.fs = 50; // временно
+          this.updateCoeffs(50, 0.25, 1.5);
         }
-        reset() { this.fast = this.slow = 0; this.init = false; }
+        updateCoeffs(fs, f0, Q) {
+          const w0 = 2 * Math.PI * f0 / fs;
+          const alpha = Math.sin(w0) / (2 * Q);
+          const cosw0 = Math.cos(w0);
+          this.b0 = alpha;
+          this.b1 = 0;
+          this.b2 = -alpha;
+          this.a0 = 1 + alpha;
+          this.a1 = -2 * cosw0;
+          this.a2 = 1 - alpha;
+          this.b0 /= this.a0; this.b1 /= this.a0; this.b2 /= this.a0;
+          this.a1 /= this.a0; this.a2 /= this.a0;
+        }
+        process(x) {
+          const y = this.b0 * x + this.b1 * this.x1 + this.b2 * this.x2
+                  - this.a1 * this.y1 - this.a2 * this.y2;
+          this.x2 = this.x1; this.x1 = x;
+          this.y2 = this.y1; this.y1 = y;
+          return y;
+        }
+        reset() { this.x1 = this.x2 = this.y1 = this.y2 = 0; }
       }
-      const bandpass = new SimpleBandpass();
+      const bandpass = new BiquadBandpass();
 
-      let prevRawTime = 0;
+      // Детектор переходов через ноль вверх
+      let zeroCrossUpTimes = [];
+      let lastZeroCrossTime = 0;
+      let prevSign = 0;
+      const MIN_PERIOD = 1000;
+      const MAX_PERIOD = 10000;
+      const MAX_CROSSES = 8;
+      let currentPeriodMs = 4000;
 
-      // Управление усилением
-      gainUpBtn.addEventListener('click', ()=> { signalGain = Math.min(5.0, signalGain+0.2); });
-      gainDownBtn.addEventListener('click', ()=> { signalGain = Math.max(0.2, signalGain-0.2); });
+      let prevTime = 0;
+
+      // Управление Gain
+      gainUpBtn.addEventListener('click', () => { signalGain = Math.min(50.0, signalGain + 2.0); });
+      gainDownBtn.addEventListener('click', () => { signalGain = Math.max(1.0, signalGain - 2.0); });
 
       function initPoints() {
         points = []; chaosOffsets = [];
         const w = window.innerWidth, h = window.innerHeight;
-        for (let r=0; r<RINGS.length; r++) {
+        for (let r = 0; r < RINGS.length; r++) {
           const ring = RINGS[r];
-          for (let i=0; i<ring.count; i++) {
+          for (let i = 0; i < ring.count; i++) {
             chaosOffsets.push({
-              bx: Math.random()*w, by: Math.random()*h,
-              dx: (Math.random()-0.5)*0.5, dy: (Math.random()-0.5)*0.5,
-              ph: Math.random()*Math.PI*2
+              bx: Math.random() * w, by: Math.random() * h,
+              dx: (Math.random() - 0.5) * 0.5, dy: (Math.random() - 0.5) * 0.5,
+              ph: Math.random() * Math.PI * 2
             });
             points.push({
-              ring:r, idx:i,
-              ang: (2*Math.PI*i)/ring.count,
-              rMin:ring.rMin, rMax:ring.rMax,
-              dMin:ring.dMin, dMax:ring.dMax,
-              jit:0.6+Math.random()*1.2
+              ring: r, idx: i,
+              ang: (2 * Math.PI * i) / ring.count,
+              rMin: ring.rMin, rMax: ring.rMax,
+              dMin: ring.dMin, dMax: ring.dMax,
+              jit: 0.6 + Math.random() * 1.2
             });
           }
         }
       }
 
       function resize() {
-        const dpr = window.devicePixelRatio||1;
-        const w=window.innerWidth, h=window.innerHeight;
-        canvas.width = Math.round(w*dpr);
-        canvas.height = Math.round(h*dpr);
-        ctx.setTransform(dpr,0,0,dpr,0,0);
-        if(chaosOffsets.length) {
-          for(let i=0;i<chaosOffsets.length;i++) {
-            chaosOffsets[i].bx = Math.random()*w;
-            chaosOffsets[i].by = Math.random()*h;
+        const dpr = window.devicePixelRatio || 1;
+        const w = window.innerWidth, h = window.innerHeight;
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        if (chaosOffsets.length) {
+          for (let i = 0; i < chaosOffsets.length; i++) {
+            chaosOffsets[i].bx = Math.random() * w;
+            chaosOffsets[i].by = Math.random() * h;
           }
         }
       }
       window.addEventListener('resize', resize);
 
-      // Автокорреляция с проверкой качества
-      function computePeriodFromBuffer(buf, length, fsEstimate) {
-        const minLag = Math.floor(fsEstimate * 1.0);   // 1 сек
-        const maxLag = Math.min(length-1, Math.floor(fsEstimate * 10.0)); // 10 сек
-        if (minLag >= maxLag) return 0;
-
-        // Среднее и дисперсия
-        let sum = 0;
-        for (let i=0; i<length; i++) sum += buf[i];
-        const mean = sum / length;
-        let totalVar = 0;
-        for (let i=0; i<length; i++) totalVar += (buf[i] - mean) ** 2;
-        if (totalVar === 0) return 0;
-
-        let bestLag = minLag;
-        let bestCorr = -Infinity;
-        for (let lag = minLag; lag <= maxLag; lag++) {
-          let corr = 0;
-          for (let i=0; i<length-lag; i++) {
-            corr += (buf[i] - mean) * (buf[i+lag] - mean);
-          }
-          if (corr > bestCorr) {
-            bestCorr = corr;
-            bestLag = lag;
-          }
-        }
-
-        // Нормированный коэффициент автокорреляции
-        const normCorr = bestCorr / totalVar;
-        if (normCorr < 0.2) return 0; // слишком слабая корреляция — не добавляем
-
-        return bestLag / fsEstimate * 1000; // период в мс
-      }
-
       function processMotion(gz, ts) {
         if (!isFinite(gz)) return;
+        rawGyroZ = gz;
+
+        // Усиленный сигнал
         const amplified = gz * signalGain;
 
-        rawBuffer[rawBufIdx % RAW_BUF_LEN] = amplified;
-        rawBufIdx++;
-        if (rawBufIdx >= RAW_BUF_LEN && !rawBufFull) rawBufFull = true;
+        // Определяем реальный dt и обновляем частоту фильтра
+        if (prevTime !== 0) {
+          const dtMs = Math.max(1, ts - prevTime);
+          const fs = 1000 / dtMs;
+          // плавно подстраиваем частоту среза фильтра под реальную частоту событий
+          if (fs > 10 && fs < 200) {
+            bandpass.updateCoeffs(fs, 0.25, 1.5);
+          }
+        }
+        prevTime = ts;
 
-        const dtMs = prevRawTime ? Math.max(1, ts - prevRawTime) : 20;
-        prevRawTime = ts;
-        const filtered = bandpass.process(amplified, dtMs);
+        // Фильтруем
+        const filtered = bandpass.process(amplified);
+
+        // Сохраняем в график
         breathGraph[graphIdx % BREATH_HIST] = filtered;
         graphIdx++;
         if (graphIdx >= BREATH_HIST && !graphFull) graphFull = true;
 
-        // Оценка периода каждые 10 новых отсчётов
-        if (rawBufFull && rawBufIdx % 10 === 0) {
-          const ordered = new Float32Array(RAW_BUF_LEN);
-          const start = rawBufIdx % RAW_BUF_LEN;
-          for (let i=0; i<RAW_BUF_LEN; i++) {
-            ordered[i] = rawBuffer[(start + i) % RAW_BUF_LEN];
+        // Детектор пересечений нуля с гистерезисом
+        const nowSign = filtered > 0.02 ? 1 : (filtered < -0.02 ? -1 : prevSign);
+        if (nowSign === 1 && prevSign === -1) {
+          const nowTs = ts;
+          if (lastZeroCrossTime !== 0) {
+            const period = nowTs - lastZeroCrossTime;
+            if (period >= MIN_PERIOD && period <= MAX_PERIOD) {
+              zeroCrossUpTimes.push(period);
+              if (zeroCrossUpTimes.length > MAX_CROSSES) zeroCrossUpTimes.shift();
+            }
           }
-          const fs = 50;
-          const periodMs = computePeriodFromBuffer(ordered, RAW_BUF_LEN, fs);
-          if (periodMs >= 1000 && periodMs <= 10000) {
-            periodEstimates.push(periodMs);
-            if (periodEstimates.length > MAX_PERIODS) periodEstimates.shift();
-            lastValidPeriodMs = periodEstimates.reduce((a,b)=>a+b,0) / periodEstimates.length;
-          }
+          lastZeroCrossTime = nowTs;
         }
-        // Обновляем текущий период, даже если новых оценок нет — сглаживаем
-        if (lastValidPeriodMs > 0) {
-          currentPeriodMs += (lastValidPeriodMs - currentPeriodMs) * 0.1;
+        prevSign = nowSign;
+
+        // Сглаженный период
+        if (zeroCrossUpTimes.length >= 2) {
+          const avg = zeroCrossUpTimes.reduce((a, b) => a + b, 0) / zeroCrossUpTimes.length;
+          currentPeriodMs += (avg - currentPeriodMs) * 0.2;
         }
       }
 
       function onDeviceMotion(e) {
         const r = e.rotationRate;
         if (!r) return;
+        // ★ используем ось Z гироскопа
         processMotion(r.z ?? 0, performance.now());
       }
 
       function computeStability() {
-        if (periodEstimates.length < 3) return 0;
-        const mean = periodEstimates.reduce((a,b)=>a+b,0) / periodEstimates.length;
-        const variance = periodEstimates.reduce((s,v)=>s+(v-mean)**2,0) / periodEstimates.length;
-        const cv = Math.sqrt(variance)/mean;
-        return Math.max(0, 1 - cv/0.15);
+        if (zeroCrossUpTimes.length < 3) return 0;
+        const mean = zeroCrossUpTimes.reduce((a, b) => a + b, 0) / zeroCrossUpTimes.length;
+        const variance = zeroCrossUpTimes.reduce((s, v) => s + (v - mean) ** 2, 0) / zeroCrossUpTimes.length;
+        const cv = Math.sqrt(variance) / mean;
+        return Math.max(0, 1 - cv / 0.15);
       }
 
       async function startSensors() {
@@ -231,7 +226,7 @@
           window.addEventListener('devicemotion', onDeviceMotion, { passive: true });
           sensorActive = true;
           startBtn.textContent = 'ПАУЗА';
-        } catch(e) { alert('Ошибка'); }
+        } catch (e) { alert('Ошибка'); }
       }
 
       function stopSensors() {
@@ -239,17 +234,18 @@
         window.removeEventListener('devicemotion', onDeviceMotion);
         sensorActive = false;
         startBtn.textContent = 'СТАРТ';
-        rawBufIdx = 0; rawBufFull = false; rawBuffer.fill(0);
-        periodEstimates = []; currentPeriodMs = 4000; lastValidPeriodMs = 0;
         bandpass.reset();
+        zeroCrossUpTimes = [];
+        lastZeroCrossTime = 0;
+        prevSign = 0;
+        currentPeriodMs = 4000;
         graphIdx = 0; graphFull = false; breathGraph.fill(0);
-        prevRawTime = 0;
+        prevTime = 0;
         targetStability = 0;
       }
 
-      startBtn.addEventListener('click', ()=> sensorActive ? stopSensors() : startSensors());
+      startBtn.addEventListener('click', () => sensorActive ? stopSensors() : startSensors());
 
-      // Отрисовка
       function draw(ts) {
         if (!lastFrameTs) lastFrameTs = ts;
         const dt = Math.min(50, ts - lastFrameTs);
@@ -257,57 +253,49 @@
         simTime += dt;
 
         const w = window.innerWidth, h = window.innerHeight;
-        ctx.clearRect(0,0,w,h);
+        ctx.clearRect(0, 0, w, h);
 
-        // Обновление стабильности (FPS-независимо)
         const rawStab = computeStability();
         targetStability = rawStab;
-        const alphaSmooth = 1 - Math.exp(-dt/600);
+        const alphaSmooth = 1 - Math.exp(-dt / 600);
         currentStability += (targetStability - currentStability) * alphaSmooth;
-        const stabPercent = Math.round(currentStability*100);
+        const stabPercent = Math.round(currentStability * 100);
         stabilityText.textContent = `СТАБИЛЬНОСТЬ ${stabPercent}%`;
         stabilityFill.style.width = `${stabPercent}%`;
 
-        // Период для анимации дыхания
         const periodAnim = currentPeriodMs || 4000;
-        breathPhase += (2*Math.PI) * (dt/periodAnim);
-        breathPhase %= (2*Math.PI);
-        const breath = (Math.sin(breathPhase)+1)/2;
+        breathPhase += (2 * Math.PI) * (dt / periodAnim);
+        breathPhase %= (2 * Math.PI);
+        const breath = (Math.sin(breathPhase) + 1) / 2;
         const eased = smoothstep(breath);
         const rotFactor = currentStability;
 
         const cx = w * 0.5, cy = h * 0.38;
-        const aspectRatio = w / h; // компенсация вытянутости экрана
+        const aspectRatio = w / h;
 
-        // Точки
-        for (let i=0; i<points.length; i++) {
+        for (let i = 0; i < points.length; i++) {
           const p = points[i];
           const ring = RINGS[p.ring];
           const ch = chaosOffsets[i];
-
           const angle = p.ang + simTime * 0.00015 * ring.rot * rotFactor;
           const radius = p.rMin + (p.rMax - p.rMin) * eased;
-          // Идеальная позиция с учётом aspect ratio, чтобы кольца были круглыми
           const ix = cx + Math.cos(angle) * radius;
           const iy = cy + Math.sin(angle) * radius * aspectRatio;
-
-          const dx = Math.sin(simTime*0.0005 + ch.ph) * 20 * ch.dx;
-          const dy = Math.cos(simTime*0.0007 + ch.ph) * 20 * ch.dy;
+          const dx = Math.sin(simTime * 0.0005 + ch.ph) * 20 * ch.dx;
+          const dy = Math.cos(simTime * 0.0007 + ch.ph) * 20 * ch.dy;
           const chX = clamp(ch.bx + dx, 0, w);
           const chY = clamp(ch.by + dy, 0, h);
-
           const x = chX + (ix - chX) * currentStability;
           const y = chY + (iy - chY) * currentStability;
-
           const idealSize = p.dMin + (p.dMax - p.dMin) * eased;
           const size = p.jit + (idealSize - p.jit) * currentStability;
           const alpha = 0.3 + 0.7 * currentStability;
           const glow = size * 2 * currentStability;
 
           ctx.beginPath();
-          ctx.arc(x, y, size, 0, 2*Math.PI);
-          ctx.fillStyle = `rgba(255,255,255,${alpha})`;
-          ctx.shadowColor = `rgba(255,255,255,${alpha*0.5})`;
+          ctx.arc(x, y, size, 0, 2 * Math.PI);
+          ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+          ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.5})`;
           ctx.shadowBlur = glow;
           ctx.fill();
         }
@@ -316,10 +304,10 @@
         // График дыхания
         const gy = h * 0.82, gh = 60, gx = 20, gw = w - 40;
         ctx.fillStyle = 'rgba(0,0,0,0.3)';
-        ctx.fillRect(gx-5, gy-gh/2-5, gw+10, gh+10);
+        ctx.fillRect(gx - 5, gy - gh / 2 - 5, gw + 10, gh + 10);
         ctx.strokeStyle = 'rgba(255,255,255,0.2)';
         ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx+gw, gy); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx + gw, gy); ctx.stroke();
 
         const cnt = graphFull ? BREATH_HIST : graphIdx;
         if (cnt > 1) {
@@ -328,12 +316,12 @@
           ctx.beginPath();
           const start = graphFull ? graphIdx : 0;
           const step = Math.max(1, Math.floor(cnt / gw));
-          for (let i=0; i < cnt-1; i += step) {
+          for (let i = 0; i < cnt - 1; i += step) {
             const i1 = (start + i) % BREATH_HIST;
             const i2 = (start + i + step) % BREATH_HIST;
             const v1 = breathGraph[i1], v2 = breathGraph[i2];
-            const x1 = gx + (i/(cnt-1)) * gw;
-            const x2 = gx + ((i+step)/(cnt-1)) * gw;
+            const x1 = gx + (i / (cnt - 1)) * gw;
+            const x2 = gx + ((i + step) / (cnt - 1)) * gw;
             ctx.moveTo(x1, gy - v1 * 15);
             ctx.lineTo(x2, gy - v2 * 15);
           }
@@ -341,8 +329,8 @@
         }
 
         // Отладка
-        const periodSec = currentPeriodMs ? (currentPeriodMs/1000).toFixed(1) : '--';
-        debugEl.textContent = `Период: ${periodSec}с | Стаб: ${stabPercent}% | Gain: ${signalGain.toFixed(1)}`;
+        const periodSec = currentPeriodMs ? (currentPeriodMs / 1000).toFixed(1) : '--';
+        debugEl.textContent = `Gyro Z: ${rawGyroZ.toFixed(3)} | Период: ${periodSec}с | Стаб: ${stabPercent}%`;
 
         requestAnimationFrame(draw);
       }
