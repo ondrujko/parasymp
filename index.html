@@ -3,39 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Ровное дыхание — IMU Biofeedback</title>
+  <title>Ровное дыхание — IMU Biofeedback (автокорреляция)</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: system-ui, sans-serif; }
-    canvas { display: block; width: 100vw; height: 100vh; }
-    #ui {
-      position: absolute; bottom: 20px; left: 0; width: 100%;
-      display: flex; flex-direction: column; align-items: center; gap: 10px;
-      color: white; z-index: 10; pointer-events: none;
-    }
-    .stability-bar {
-      width: 80%; max-width: 300px; height: 8px; background: rgba(255,255,255,0.2);
-      border-radius: 4px; overflow: hidden; margin-top: 5px;
-    }
-    .stability-fill {
-      height: 100%; width: 0%; background: linear-gradient(90deg, #ff4d4d, #ffdd57, #4caf50);
-      border-radius: 4px; transition: width 0.2s ease;
-    }
-    #stability-text { font-size: 16px; letter-spacing: 2px; color: rgba(255,255,255,0.8); }
-    button {
-      pointer-events: auto; padding: 10px 20px; background: rgba(255,255,255,0.15);
-      border: 1px solid rgba(255,255,255,0.3); color: white; border-radius: 30px;
-      font-size: 14px; backdrop-filter: blur(10px); cursor: pointer; margin: 0 5px;
-    }
-    button:hover { background: rgba(255,255,255,0.25); }
-    #controls { display: flex; gap: 10px; margin-top: 5px; }
-    .info { font-size: 12px; color: rgba(255,255,255,0.5); max-width: 80%; text-align: center; }
-    #debug { position: absolute; top: 10px; left: 10px; color: rgba(255,255,255,0.6); font-size: 12px; z-index: 10; pointer-events: none; }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html,body { width:100%; height:100%; overflow:hidden; background:#000; font-family:system-ui,sans-serif; }
+    canvas { display:block; width:100vw; height:100vh; }
+    #ui { position:absolute; bottom:20px; left:0; width:100%; display:flex; flex-direction:column; align-items:center; gap:10px; color:white; z-index:10; pointer-events:none; }
+    .stability-bar { width:80%; max-width:300px; height:8px; background:rgba(255,255,255,0.2); border-radius:4px; overflow:hidden; margin-top:5px; }
+    .stability-fill { height:100%; width:0%; background:linear-gradient(90deg,#ff4d4d,#ffdd57,#4caf50); border-radius:4px; transition:width 0.2s ease; }
+    #stability-text { font-size:16px; letter-spacing:2px; color:rgba(255,255,255,0.8); }
+    button { pointer-events:auto; padding:10px 20px; background:rgba(255,255,255,0.15); border:1px solid rgba(255,255,255,0.3); color:white; border-radius:30px; font-size:14px; backdrop-filter:blur(10px); cursor:pointer; margin:0 5px; }
+    button:hover { background:rgba(255,255,255,0.25); }
+    #controls { display:flex; gap:10px; margin-top:5px; }
+    .info { font-size:12px; color:rgba(255,255,255,0.5); max-width:80%; text-align:center; }
+    #debug { position:absolute; top:10px; left:10px; color:rgba(255,255,255,0.6); font-size:12px; z-index:10; pointer-events:none; }
   </style>
 </head>
 <body>
   <canvas id="canvas"></canvas>
-  <div id="debug">Циклов: 0 | Период: --с | Gain: 1</div>
+  <div id="debug">Период: --с | Стаб: 0%</div>
   <div id="ui">
     <div id="stability-text">СТАБИЛЬНОСТЬ 0%</div>
     <div class="stability-bar"><div id="stability-fill" class="stability-fill"></div></div>
@@ -48,7 +34,8 @@
   </div>
 
   <script>
-    (() => {
+    (()=>{
+      // DOM элементы
       const canvas = document.getElementById('canvas');
       const ctx = canvas.getContext('2d', { alpha: true });
       const startBtn = document.getElementById('start-btn');
@@ -58,114 +45,82 @@
       const gainUpBtn = document.getElementById('gain-up');
       const gainDownBtn = document.getElementById('gain-down');
 
-      // Параметры колец (визуализация)
+      // Визуальные кольца
       const RINGS = [
-        { count: 28, rMin: 55, rMax: 110, dMin: 6, dMax: 10, rot: 0.20 },
-        { count: 32, rMin: 85, rMax: 165, dMin: 7, dMax: 10, rot: 0.10 },
-        { count: 36, rMin: 115, rMax: 220, dMin: 6, dMax: 11, rot: 0.05 },
-        { count: 40, rMin: 145, rMax: 285, dMin: 6, dMax: 14, rot: 0.025 }
+        { count:28, rMin:55, rMax:110, dMin:6, dMax:10, rot:0.20 },
+        { count:32, rMin:85, rMax:165, dMin:7, dMax:10, rot:0.10 },
+        { count:36, rMin:115, rMax:220, dMin:6, dMax:11, rot:0.05 },
+        { count:40, rMin:145, rMax:285, dMin:6, dMax:14, rot:0.025 }
       ];
-
-      let points = [];
-      let chaosOffsets = [];
+      let points = [], chaosOffsets = [];
 
       // Анимация
-      let targetStability = 0;
-      let currentStability = 0;
-      let breathPhase = 0;
-      let simTime = 0;
-      let lastFrameTs = 0;
+      let targetStability = 0, currentStability = 0;
+      let breathPhase = 0, simTime = 0, lastFrameTs = 0;
 
-      // График дыхания (400 точек)
-      const BREATH_HISTORY = 400;
-      let breathGraph = new Float32Array(BREATH_HISTORY);
-      let graphIdx = 0;
-      let graphFull = false;
+      // График дыхания (только для визуализации)
+      const BREATH_HIST = 400;
+      let breathGraph = new Float32Array(BREATH_HIST);
+      let graphIdx = 0, graphFull = false;
 
       // Сигнальный тракт
       let sensorActive = false;
-      let signalGain = 1.0;            // пользовательская регулировка усиления
+      let signalGain = 1.0;
 
-      // Фильтр Баттерворта 2-го порядка (реализация биквада)
-      class BiquadFilter {
-        constructor(fs, f0, Q) {
-          const w0 = 2 * Math.PI * f0 / fs;
-          const alpha = Math.sin(w0) / (2 * Q);
-          const cosw0 = Math.cos(w0);
+      // Буфер для автокорреляции: 5 секунд при ~50 Гц => 250 отсчётов
+      const RAW_BUF_LEN = 256;
+      let rawBuffer = new Float32Array(RAW_BUF_LEN);
+      let rawBufIdx = 0, rawBufFull = false;
 
-          this.b0 = (1 - cosw0) / 2;
-          this.b1 = 1 - cosw0;
-          this.b2 = (1 - cosw0) / 2;
-          this.a0 = 1 + alpha;
-          this.a1 = -2 * cosw0;
-          this.a2 = 1 - alpha;
+      // Результаты оценки периода
+      const MAX_PERIODS = 8;
+      let periodEstimates = [];       // последние N оценок (в мс)
+      let currentPeriodMs = 4000;     // текущая сглаженная оценка
 
-          // Нормализация коэффициентов
-          this.b0 /= this.a0; this.b1 /= this.a0; this.b2 /= this.a0;
-          this.a1 /= this.a0; this.a2 /= this.a0;
-
-          this.x1 = this.x2 = 0;
-          this.y1 = this.y2 = 0;
+      // Фильтр для отображения дыхания
+      class SimpleBandpass {
+        constructor() {
+          this.fast = 0; this.slow = 0;
+          this.initialized = false;
         }
-        process(x) {
-          const y = this.b0 * x + this.b1 * this.x1 + this.b2 * this.x2 - this.a1 * this.y1 - this.a2 * this.y2;
-          this.x2 = this.x1; this.x1 = x;
-          this.y2 = this.y1; this.y1 = y;
-          return y;
+        process(x, dtMs) {
+          if (!this.initialized) { this.fast = this.slow = x; this.initialized = true; return 0; }
+          const aFast = Math.min(1, dtMs/1000 / 0.22);
+          const aSlow = Math.min(1, dtMs/1000 / 1.8);
+          this.fast += aFast * (x - this.fast);
+          this.slow += aSlow * (x - this.slow);
+          return this.fast - this.slow;
         }
-        reset() {
-          this.x1 = this.x2 = 0;
-          this.y1 = this.y2 = 0;
-        }
+        reset() { this.fast = this.slow = 0; this.initialized = false; }
       }
+      const bandpass = new SimpleBandpass();
 
-      // Фильтры (частота дискретизации ~50 Гц)
-      const SAMPLE_RATE = 50; // предполагаемая
-      let bandpass = new BiquadFilter(SAMPLE_RATE, 0.25, 1.5); // центральная частота 0.25 Гц, Q=1.5
-      let lowpass = new BiquadFilter(SAMPLE_RATE, 0.5, 0.707); // дополнительный сглаживающий
-
-      // Буфер для хранения отфильтрованного сигнала (для поиска пиков)
-      let signalBuffer = new Float32Array(200);
-      let sigBufIdx = 0;
-      let sigBufFull = false;
-
-      // Пиковый детектор
-      let peakTimes = [];       // времена пиков (мс)
-      let peakValues = [];      // значения пиков
-      let lastPeakTime = 0;
-      const MIN_PEAK_DISTANCE = 1500; // мс
-      const MAX_PEAK_PERIOD = 12000;
-
+      // Предыдущее сырое значение и время для фильтра
       let prevRaw = null;
-      const MAX_RAW_DELTA = 2.0;
-
-      // Вспомогательные функции
-      function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
-      function smoothstep(t) { return 0.5 - 0.5 * Math.cos(Math.PI * t); }
+      let prevRawTime = 0;
+      const MAX_DELTA = 2.0;
 
       // Управление усилением
-      gainUpBtn.addEventListener('click', () => { signalGain = Math.min(5.0, signalGain + 0.2); });
-      gainDownBtn.addEventListener('click', () => { signalGain = Math.max(0.2, signalGain - 0.2); });
+      gainUpBtn.addEventListener('click', ()=> { signalGain = Math.min(5.0, signalGain+0.2); });
+      gainDownBtn.addEventListener('click', ()=> { signalGain = Math.max(0.2, signalGain-0.2); });
 
-      // Инициализация точек
       function initPoints() {
-        points = [];
-        chaosOffsets = [];
+        points = []; chaosOffsets = [];
         const w = window.innerWidth, h = window.innerHeight;
-        for (let r = 0; r < RINGS.length; r++) {
+        for (let r=0; r<RINGS.length; r++) {
           const ring = RINGS[r];
-          for (let i = 0; i < ring.count; i++) {
+          for (let i=0; i<ring.count; i++) {
             chaosOffsets.push({
-              bx: Math.random() * w, by: Math.random() * h,
+              bx: Math.random()*w, by: Math.random()*h,
               dx: (Math.random()-0.5)*0.5, dy: (Math.random()-0.5)*0.5,
               ph: Math.random()*Math.PI*2
             });
             points.push({
-              ring: r, idx: i,
+              ring:r, idx:i,
               ang: (2*Math.PI*i)/ring.count,
-              rMin: ring.rMin, rMax: ring.rMax,
-              dMin: ring.dMin, dMax: ring.dMax,
-              jit: 0.6+Math.random()*1.2
+              rMin:ring.rMin, rMax:ring.rMax,
+              dMin:ring.dMin, dMax:ring.dMax,
+              jit:0.6+Math.random()*1.2
             });
           }
         }
@@ -186,78 +141,86 @@
       }
       window.addEventListener('resize', resize);
 
-      // Обработка данных с акселерометра
+      // --- Автокорреляция ---
+      function computePeriodFromBuffer(buf, length, fsEstimate) {
+        // buf - Float32Array длины length (кольцевой, но мы передаём упорядоченную копию)
+        // fsEstimate - приблизительная частота дискретизации (событий/сек)
+        // Ищем период в диапазоне 1-10 сек (индексы от fsEstimate*1 до fsEstimate*10)
+        const minLag = Math.floor(fsEstimate * 1.0);
+        const maxLag = Math.min(length-1, Math.floor(fsEstimate * 10.0));
+        if (minLag >= maxLag) return 4000; // не хватает данных
+
+        // Вычисляем среднее
+        let sum = 0;
+        for (let i=0; i<length; i++) sum += buf[i];
+        const mean = sum / length;
+
+        // Автокорреляция
+        let bestLag = minLag;
+        let bestCorr = -Infinity;
+        for (let lag = minLag; lag <= maxLag; lag++) {
+          let corr = 0;
+          for (let i=0; i<length-lag; i++) {
+            corr += (buf[i] - mean) * (buf[i+lag] - mean);
+          }
+          if (corr > bestCorr) {
+            bestCorr = corr;
+            bestLag = lag;
+          }
+        }
+        return bestLag / fsEstimate * 1000; // период в мс
+      }
+
+      // Обработка нового отсчёта
       function processMotion(az, ts) {
         if (!isFinite(az)) return;
         // Защита от выбросов
-        if (prevRaw !== null && Math.abs(az - prevRaw) > MAX_RAW_DELTA) {
+        if (prevRaw !== null && Math.abs(az - prevRaw) > MAX_DELTA) {
           prevRaw = az;
+          prevRawTime = ts;
           return;
         }
         prevRaw = az;
+        const dtMs = prevRawTime ? ts - prevRawTime : 20;
+        prevRawTime = ts;
 
-        // Применяем усиление
+        // Усиленный сигнал
         const amplified = az * signalGain;
 
-        // Фильтрация
-        const filtered1 = bandpass.process(amplified);
-        const filtered = lowpass.process(filtered1);
+        // Кладём в буфер для автокорреляции
+        rawBuffer[rawBufIdx % RAW_BUF_LEN] = amplified;
+        rawBufIdx++;
+        if (rawBufIdx >= RAW_BUF_LEN && !rawBufFull) rawBufFull = true;
 
-        // Сохраняем в буфер для анализа
-        signalBuffer[sigBufIdx % signalBuffer.length] = filtered;
-        sigBufIdx++;
-        if (sigBufIdx >= signalBuffer.length && !sigBufFull) sigBufFull = true;
-
-        // Сохраняем в график дыхания (используем отфильтрованное)
-        breathGraph[graphIdx % BREATH_HISTORY] = filtered;
+        // Фильтрованный сигнал для графика дыхания
+        const filtered = bandpass.process(amplified, dtMs);
+        breathGraph[graphIdx % BREATH_HIST] = filtered;
         graphIdx++;
-        if (graphIdx >= BREATH_HISTORY) graphFull = true;
+        if (graphIdx >= BREATH_HIST && !graphFull) graphFull = true;
 
-        // Поиск пиков (только когда накоплено достаточно данных)
-        if (!sigBufFull) return;
-        const bufLen = signalBuffer.length;
-        const halfWindow = 10; // окно для проверки локального максимума
-        const currentIdx = (sigBufIdx - 1) % bufLen;
-        const currentVal = signalBuffer[currentIdx];
-
-        // Вычисляем RMS шума для адаптивного порога
-        let sumSq = 0;
-        const rmsWindow = 50;
-        for (let i = 0; i < rmsWindow; i++) {
-          const idx = (currentIdx - i + bufLen) % bufLen;
-          sumSq += signalBuffer[idx] * signalBuffer[idx];
-        }
-        const rms = Math.sqrt(sumSq / rmsWindow);
-        const threshold = rms * 1.5; // порог = 1.5 * RMS
-
-        // Проверяем, является ли текущая точка локальным максимумом
-        let isPeak = currentVal > threshold;
-        for (let i = 1; i <= halfWindow; i++) {
-          const idx = (currentIdx - i + bufLen) % bufLen;
-          if (signalBuffer[idx] >= currentVal) { isPeak = false; break; }
-        }
-        for (let i = 1; i <= halfWindow; i++) {
-          const idx = (currentIdx + i) % bufLen;
-          if (signalBuffer[idx] >= currentVal) { isPeak = false; break; }
-        }
-
-        if (isPeak && (ts - lastPeakTime) > MIN_PEAK_DISTANCE) {
-          if (lastPeakTime !== 0) {
-            const period = ts - lastPeakTime;
-            if (period < MAX_PEAK_PERIOD) {
-              peakTimes.push(ts);
-              peakValues.push(currentVal);
-              // Оставляем последние 12 периодов
-              if (peakTimes.length > 13) {
-                peakTimes.shift();
-                peakValues.shift();
-              }
-            }
-          } else {
-            peakTimes.push(ts);
-            peakValues.push(currentVal);
+        // Периодически (каждые 500 мс) оцениваем период, если буфер заполнен
+        if (rawBufFull && (rawBufIdx % Math.floor(RAW_BUF_LEN/10) === 0)) {
+          // Формируем упорядоченную копию буфера (от старого к новому)
+          const ordered = new Float32Array(RAW_BUF_LEN);
+          const start = rawBufIdx % RAW_BUF_LEN;
+          for (let i=0; i<RAW_BUF_LEN; i++) {
+            ordered[i] = rawBuffer[(start + i) % RAW_BUF_LEN];
           }
-          lastPeakTime = ts;
+          // Оцениваем частоту дискретизации: средний интервал между отсчётами
+          // Используем длину буфера и предположительное время заполнения
+          // Но проще: фиксированная частота 50 Гц (примерно)
+          const fs = 50;
+          const periodMs = computePeriodFromBuffer(ordered, RAW_BUF_LEN, fs);
+          if (periodMs >= 1000 && periodMs <= 10000) {
+            periodEstimates.push(periodMs);
+            if (periodEstimates.length > MAX_PERIODS) periodEstimates.shift();
+            // Сглаживаем оценку
+            if (periodEstimates.length >= 2) {
+              currentPeriodMs = periodEstimates.reduce((a,b)=>a+b,0) / periodEstimates.length;
+            } else {
+              currentPeriodMs = periodMs;
+            }
+          }
         }
       }
 
@@ -267,23 +230,19 @@
         processMotion(a.z ?? 0, performance.now());
       }
 
-      // Вычисление стабильности по периодам
+      // Стабильность по вариабельности оценок периода
       function computeStability() {
-        if (peakTimes.length < 4) return 0;
-        const periods = [];
-        for (let i = 1; i < peakTimes.length; i++) {
-          periods.push(peakTimes[i] - peakTimes[i-1]);
-        }
-        const mean = periods.reduce((s,v)=>s+v,0)/periods.length;
-        const variance = periods.reduce((s,v)=>s+(v-mean)**2,0)/periods.length;
+        if (periodEstimates.length < 3) return 0;
+        const mean = periodEstimates.reduce((a,b)=>a+b,0) / periodEstimates.length;
+        const variance = periodEstimates.reduce((s,v)=>s+(v-mean)**2,0) / periodEstimates.length;
         const cv = Math.sqrt(variance)/mean;
         return Math.max(0, 1 - cv/0.15);
       }
 
-      // Запуск/остановка датчиков
+      // Запуск/остановка
       async function startSensors() {
         if (sensorActive) return;
-        if (typeof DeviceMotionEvent === 'undefined') { alert('Нет датчиков'); return; }
+        if (typeof DeviceMotionEvent === 'undefined') { alert('Датчики не поддерживаются'); return; }
         try {
           if (typeof DeviceMotionEvent.requestPermission === 'function') {
             const p = await DeviceMotionEvent.requestPermission();
@@ -301,20 +260,17 @@
         sensorActive = false;
         startBtn.textContent = 'СТАРТ';
         // Сброс
+        rawBufIdx = 0; rawBufFull = false; rawBuffer.fill(0);
+        periodEstimates = []; currentPeriodMs = 4000;
         bandpass.reset();
-        lowpass.reset();
-        sigBufIdx = 0; sigBufFull = false;
-        signalBuffer.fill(0);
-        peakTimes = []; peakValues = []; lastPeakTime = 0;
-        graphIdx = 0; graphFull = false;
-        breathGraph.fill(0);
-        prevRaw = null;
+        graphIdx = 0; graphFull = false; breathGraph.fill(0);
+        prevRaw = null; prevRawTime = 0;
         targetStability = 0;
       }
 
-      startBtn.addEventListener('click', ()=> sensorActive? stopSensors() : startSensors());
+      startBtn.addEventListener('click', ()=> sensorActive ? stopSensors() : startSensors());
 
-      // Отрисовка
+      // --- Отрисовка ---
       function draw(ts) {
         if (!lastFrameTs) lastFrameTs = ts;
         const dt = Math.min(50, ts - lastFrameTs);
@@ -324,23 +280,18 @@
         const w = window.innerWidth, h = window.innerHeight;
         ctx.clearRect(0,0,w,h);
 
-        // Обновление стабильности с FPS-независимым сглаживанием
+        // Стабильность
         const rawStab = computeStability();
         targetStability = rawStab;
-        const alpha = 1 - Math.exp(-dt/600);
-        currentStability += (targetStability - currentStability) * alpha;
+        const alphaSmooth = 1 - Math.exp(-dt/600);
+        currentStability += (targetStability - currentStability) * alphaSmooth;
         const stabPercent = Math.round(currentStability*100);
         stabilityText.textContent = `СТАБИЛЬНОСТЬ ${stabPercent}%`;
         stabilityFill.style.width = `${stabPercent}%`;
 
-        // Период для анимации
-        let avgPeriod = 4000;
-        if (peakTimes.length >= 2) {
-          const periods = [];
-          for (let i=1;i<peakTimes.length;i++) periods.push(peakTimes[i]-peakTimes[i-1]);
-          avgPeriod = periods.reduce((a,b)=>a+b,0)/periods.length;
-        }
-        breathPhase += (2*Math.PI) * (dt/avgPeriod);
+        // Анимация дыхания на основе текущего периода
+        const periodAnim = currentPeriodMs || 4000;
+        breathPhase += (2*Math.PI) * (dt/periodAnim);
         breathPhase %= (2*Math.PI);
         const breath = (Math.sin(breathPhase)+1)/2;
         const eased = smoothstep(breath);
@@ -348,8 +299,8 @@
 
         const cx = w*0.5, cy = h*0.38;
 
-        // Визуализация точек (кольца/облако)
-        for (let i=0;i<points.length;i++) {
+        // Точки
+        for (let i=0; i<points.length; i++) {
           const p = points[i];
           const ring = RINGS[p.ring];
           const ch = chaosOffsets[i];
@@ -359,38 +310,36 @@
           const iy = cy + Math.sin(angle)*radius;
           const dx = Math.sin(simTime*0.0005+ch.ph)*20*ch.dx;
           const dy = Math.cos(simTime*0.0007+ch.ph)*20*ch.dy;
-          const chX = clamp(ch.bx+dx,0,w);
-          const chY = clamp(ch.by+dy,0,h);
+          const chX = clamp(ch.bx+dx,0,w), chY = clamp(ch.by+dy,0,h);
           const x = chX + (ix-chX)*currentStability;
           const y = chY + (iy-chY)*currentStability;
           const isize = p.dMin + (p.dMax-p.dMin)*eased;
           const size = p.jit + (isize-p.jit)*currentStability;
-          const alphaPt = 0.3+0.7*currentStability;
+          const alpha = 0.3+0.7*currentStability;
           const glow = size*2*currentStability;
-          ctx.beginPath();
-          ctx.arc(x,y,size,0,2*Math.PI);
-          ctx.fillStyle = `rgba(255,255,255,${alphaPt})`;
-          ctx.shadowColor = `rgba(255,255,255,${alphaPt*0.5})`;
+          ctx.beginPath(); ctx.arc(x,y,size,0,2*Math.PI);
+          ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+          ctx.shadowColor = `rgba(255,255,255,${alpha*0.5})`;
           ctx.shadowBlur = glow;
           ctx.fill();
         }
         ctx.shadowBlur = 0;
 
-        // График дыхания
+        // График
         const gy = h*0.82, gh = 60, gx=20, gw=w-40;
         ctx.fillStyle='rgba(0,0,0,0.3)';
         ctx.fillRect(gx-5,gy-gh/2-5,gw+10,gh+10);
         ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1;
         ctx.beginPath(); ctx.moveTo(gx,gy); ctx.lineTo(gx+gw,gy); ctx.stroke();
 
-        const cnt = graphFull ? BREATH_HISTORY : graphIdx;
+        const cnt = graphFull ? BREATH_HIST : graphIdx;
         if(cnt>1) {
           ctx.strokeStyle='rgba(255,255,255,0.8)'; ctx.lineWidth=2;
           ctx.beginPath();
           const start = graphFull ? graphIdx : 0;
           const step = Math.max(1, Math.floor(cnt/gw));
-          for(let i=0;i<cnt-1;i+=step) {
-            const i1=(start+i)%BREATH_HISTORY, i2=(start+i+step)%BREATH_HISTORY;
+          for(let i=0; i<cnt-1; i+=step) {
+            const i1=(start+i)%BREATH_HIST, i2=(start+i+step)%BREATH_HIST;
             const v1=breathGraph[i1], v2=breathGraph[i2];
             const x1=gx+(i/(cnt-1))*gw, x2=gx+((i+step)/(cnt-1))*gw;
             ctx.moveTo(x1, gy-v1*15);
@@ -400,12 +349,14 @@
         }
 
         // Отладка
-        const nCycles = peakTimes.length > 1 ? peakTimes.length-1 : 0;
-        const periodStr = avgPeriod ? (avgPeriod/1000).toFixed(1) : '--';
-        debugEl.textContent = `Циклов: ${nCycles} | Период: ${periodStr}с | Gain: ${signalGain.toFixed(1)}`;
+        const periodSec = currentPeriodMs ? (currentPeriodMs/1000).toFixed(1) : '--';
+        debugEl.textContent = `Период: ${periodSec}с | Стаб: ${stabPercent}% | Gain: ${signalGain.toFixed(1)}`;
 
         requestAnimationFrame(draw);
       }
+
+      function clamp(v,min,max) { return Math.max(min,Math.min(max,v)); }
+      function smoothstep(t) { return 0.5-0.5*Math.cos(Math.PI*t); }
 
       function init() {
         resize();
