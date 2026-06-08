@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Parasymp — изотропная гравитация</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: 'Segoe UI', sans-serif;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+    #ui {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px 24px;
+      align-items: center;
+      justify-content: center;
+      background: rgba(20,20,30,0.8);
+      padding: 12px 24px;
+      border-radius: 40px;
+      color: #fff;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+    }
+    .slider-group {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+    .slider-group label {
+      font-size: 0.8em;
+      opacity: 0.8;
+    }
+    .slider-group span {
+      font-size: 0.9em;
+      font-weight: bold;
+    }
+    input[type=range] {
+      width: 100px;
+    }
+    @media (max-width: 600px) {
+      #ui { flex-direction: column; gap: 10px; padding: 10px 20px; }
+      input[type=range] { width: 80px; }
+    }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="ui">
+  <div class="slider-group">
+    <label>Хаос ↔ Когерентность</label>
+    <input type="range" id="coherenceSlider" min="0" max="1" step="0.01" value="0.5">
+    <span id="coherenceValue">0.50</span>
+  </div>
+  <div class="slider-group">
+    <label>Дыхание пользователя (вдох/мин)</label>
+    <input type="range" id="breathRateSlider" min="3" max="18" step="0.5" value="6">
+    <span id="breathRateValue">6.0</span>
+  </div>
+  <div class="slider-group">
+    <label>Ритм-гид (вдох/мин)</label>
+    <input type="range" id="guideRateSlider" min="3" max="18" step="0.5" value="6">
+    <span id="guideRateValue">6.0</span>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+// UI
+const coherenceSlider = document.getElementById("coherenceSlider");
+const coherenceValue = document.getElementById("coherenceValue");
+const breathRateSlider = document.getElementById("breathRateSlider");
+const breathRateValue = document.getElementById("breathRateValue");
+const guideRateSlider = document.getElementById("guideRateSlider");
+const guideRateValue = document.getElementById("guideRateValue");
+
+coherenceSlider.addEventListener("input", () => coherenceValue.textContent = parseFloat(coherenceSlider.value).toFixed(2));
+breathRateSlider.addEventListener("input", () => breathRateValue.textContent = parseFloat(breathRateSlider.value).toFixed(1));
+guideRateSlider.addEventListener("input", () => guideRateValue.textContent = parseFloat(guideRateSlider.value).toFixed(1));
+
+// Кольца (с множителями)
+const ringsDef = [
+  { count: 28, rMin: 55,  rMax: 110, dotMin: 6/5,  dotMax: 10/5, rotSpeed: 2.0 },
+  { count: 32, rMin: 85,  rMax: 165, dotMin: 7/5,  dotMax: 10/5, rotSpeed: 1.0 },
+  { count: 36, rMin: 115, rMax: 220, dotMin: 6/5,  dotMax: 11/5, rotSpeed: 0.5 },
+  { count: 40, rMin: 145, rMax: 285, dotMin: 6/5,  dotMax: 14/5, rotSpeed: 0.25 }
+];
+
+const particles = [];
+const chaosState = [];
+
+ringsDef.forEach((ring, ringIdx) => {
+  for (let i = 0; i < ring.count; i++) {
+    const angle = (Math.PI * 2 * i) / ring.count;
+    particles.push({
+      ringIdx,
+      dotIdx: i,
+      baseAngle: angle,
+      grayShade: 120 + Math.floor(Math.random() * 100)
+    });
+  }
+});
+
+let width, height, centerX, centerY;
+let halfW, halfH;   // полуширина и полувысота для расчёта edgeDist
+
+function resize() {
+  canvas.width = window.innerWidth * window.devicePixelRatio;
+  canvas.height = window.innerHeight * window.devicePixelRatio;
+  ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+  width = window.innerWidth;
+  height = window.innerHeight;
+  centerX = width * 0.5;
+  centerY = height * 0.5;
+  halfW = width * 0.5;
+  halfH = height * 0.5;
+}
+resize();
+window.addEventListener("resize", () => {
+  resize();
+  initChaos();
+});
+
+function smooth(t) {
+  return 0.5 - 0.5 * Math.cos(Math.PI * t);
+}
+
+function clamp(val, min, max) {
+  return Math.min(max, Math.max(min, val));
+}
+
+function initChaos() {
+  chaosState.length = 0;
+  for (let i = 0; i < particles.length; i++) {
+    chaosState.push({
+      baseX: Math.random() * width,
+      baseY: Math.random() * height,
+      driftX: (Math.random() - 0.5) * 0.4,
+      driftY: (Math.random() - 0.5) * 0.4,
+      phase: Math.random() * Math.PI * 2
+    });
+  }
+}
+initChaos();
+
+const centralMinRadius = 25;
+const centralMaxRadius = 60;
+
+// Изотропная эффективная когерентность
+function calcPointCoherence(globalCoherence, dx, dy, dist) {
+  if (dist < 0.001) return 1.0;   // точка прямо в центре — всегда упорядочена
+  // Косинус и синус направления
+  const cosA = dx / dist;
+  const sinA = dy / dist;
+  // Максимальное расстояние от центра до края экрана в этом направлении
+  const edgeDist = Math.sqrt((halfW * cosA) ** 2 + (halfH * sinA) ** 2);
+  // Порог активации: 0 в центре, 1 на границе (кубическая зависимость)
+  const threshold = Math.pow(dist / edgeDist, 3);
+  if (threshold >= 0.999) {
+    return globalCoherence >= 1.0 ? 1.0 : 0.0;
+  }
+  const effective = (globalCoherence - threshold) / (1.0 - threshold);
+  return clamp(effective, 0.0, 1.0);
+}
+
+function render(time) {
+  ctx.clearRect(0, 0, width, height);
+
+  const globalCoherence = parseFloat(coherenceSlider.value);
+  const userBPM = parseFloat(breathRateSlider.value);
+  const guideBPM = parseFloat(guideRateSlider.value);
+
+  const userFreq = userBPM / 60;
+  const guideFreq = guideBPM / 60;
+
+  const userPhase = (Math.sin(time * 0.001 * Math.PI * 2 * userFreq) + 1) * 0.5;
+  const easedUser = smooth(userPhase);
+
+  const guidePhase = (Math.sin(time * 0.001 * Math.PI * 2 * guideFreq) + 1) * 0.5;
+
+  // Обновление хаотичных позиций (звёздное поле)
+  const tSec = time * 0.001;
+  for (let i = 0; i < particles.length; i++) {
+    const cs = chaosState[i];
+    const driftX = Math.sin(tSec * 0.5 + cs.phase) * 25 * cs.driftX;
+    const driftY = Math.cos(tSec * 0.7 + cs.phase) * 25 * cs.driftY;
+    cs.currentX = clamp(cs.baseX + driftX, 0, width);
+    cs.currentY = clamp(cs.baseY + driftY, 0, height);
+  }
+
+  // Рисуем все точки
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
+    const ring = ringsDef[p.ringIdx];
+    const cs = chaosState[i];
+
+    const dx = cs.currentX - centerX;
+    const dy = cs.currentY - centerY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    // Изотропная когерентность на основе направления
+    const pointCoherence = calcPointCoherence(globalCoherence, dx, dy, dist);
+
+    // Идеальная позиция на кольце
+    const radius = ring.rMin + (ring.rMax - ring.rMin) * easedUser;
+    const dotSize = ring.dotMin + (ring.dotMax - ring.dotMin) * easedUser;
+    const rotation = time * 0.00015 * ring.rotSpeed;
+    const angle = p.baseAngle + rotation;
+    const idealX = centerX + Math.cos(angle) * radius;
+    const idealY = centerY + Math.sin(angle) * radius;
+
+    // Интерполяция хаос → порядок
+    const x = cs.currentX + (idealX - cs.currentX) * pointCoherence;
+    const y = cs.currentY + (idealY - cs.currentY) * pointCoherence;
+
+    const shade = p.grayShade;
+    const alpha = 0.25 + 0.7 * pointCoherence;
+    const glow = dotSize * (1.0 + pointCoherence * 2.5);
+
+    ctx.beginPath();
+    ctx.arc(x, y, dotSize, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${shade}, ${shade}, ${shade}, ${alpha})`;
+    ctx.shadowColor = `rgba(${shade}, ${shade}, ${shade}, ${alpha * 0.6})`;
+    ctx.shadowBlur = glow;
+    ctx.fill();
+  }
+
+  // Сброс тени
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+
+  // Центральный гид (чёткий белый диск)
+  const centralRadius = centralMinRadius + (centralMaxRadius - centralMinRadius) * guidePhase;
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, centralRadius, 0, Math.PI * 2);
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+
+  requestAnimationFrame(render);
+}
+
+requestAnimationFrame(render);
+</script>
+</body>
+</html>
