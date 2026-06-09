@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Parasymp — надёжный датчик</title>
+  <title>Parasymp — кнопка Старт</title>
   <style>
     html, body {
       margin: 0;
@@ -25,7 +25,7 @@
       transform: translateX(-50%);
       display: flex;
       flex-wrap: wrap;
-      gap: 16px 24px;
+      gap: 12px 20px;
       align-items: center;
       justify-content: center;
       background: rgba(20,20,30,0.8);
@@ -53,7 +53,7 @@
       width: 100px;
     }
     select, button {
-      padding: 6px 12px;
+      padding: 6px 14px;
       border-radius: 20px;
       background: rgba(255,255,255,0.15);
       border: 1px solid rgba(255,255,255,0.3);
@@ -64,8 +64,12 @@
     select:hover, button:hover {
       background: rgba(255,255,255,0.25);
     }
+    button.primary {
+      background: rgba(100,150,255,0.3);
+      border-color: rgba(100,150,255,0.6);
+    }
     @media (max-width: 600px) {
-      #ui { flex-direction: column; gap: 10px; padding: 10px 20px; }
+      #ui { flex-direction: column; gap: 8px; padding: 10px 20px; }
       input[type=range] { width: 80px; }
     }
   </style>
@@ -85,19 +89,20 @@
   </div>
   <div class="slider-group" id="sensorBreathGroup" style="display: none;">
     <label>Ваше дыхание</label>
-    <span id="sensorBreathValue">-- BPM</span>
+    <span id="sensorBreathValue">--</span>
   </div>
   <div class="slider-group">
     <label>Ритм-гид (вдох/мин)</label>
     <input type="range" id="guideRateSlider" min="3" max="18" step="0.5" value="6">
     <span id="guideRateValue">6.0</span>
   </div>
-  <div>
+  <div style="display: flex; gap: 8px; align-items: center;">
     <label>Режим:</label>
     <select id="modeSelect">
       <option value="sim">Симуляция</option>
       <option value="sensor">Датчик</option>
     </select>
+    <button id="startSensorBtn" class="primary" style="display:none;">Старт</button>
     <button id="calibrateBtn" style="display:none;">Сброс</button>
   </div>
 </div>
@@ -114,6 +119,7 @@ const breathRateValue = document.getElementById("breathRateValue");
 const guideRateSlider = document.getElementById("guideRateSlider");
 const guideRateValue = document.getElementById("guideRateValue");
 const modeSelect = document.getElementById("modeSelect");
+const startSensorBtn = document.getElementById("startSensorBtn");
 const calibrateBtn = document.getElementById("calibrateBtn");
 const userBreathGroup = document.getElementById("userBreathGroup");
 const sensorBreathGroup = document.getElementById("sensorBreathGroup");
@@ -123,22 +129,15 @@ coherenceSlider.addEventListener("input", () => coherenceValue.textContent = par
 breathRateSlider.addEventListener("input", () => breathRateValue.textContent = parseFloat(breathRateSlider.value).toFixed(1));
 guideRateSlider.addEventListener("input", () => guideRateValue.textContent = parseFloat(guideRateSlider.value).toFixed(1));
 
-modeSelect.addEventListener("change", async () => {
+modeSelect.addEventListener("change", () => {
   const isSensor = modeSelect.value === "sensor";
   userBreathGroup.style.display = isSensor ? "none" : "flex";
   sensorBreathGroup.style.display = isSensor ? "flex" : "none";
+  startSensorBtn.style.display = isSensor ? "inline-block" : "none";
   calibrateBtn.style.display = isSensor ? "inline-block" : "none";
-  if (isSensor) {
-    await startSensor();
-  } else {
+  if (!isSensor) {
     stopSensor();
   }
-});
-
-calibrateBtn.addEventListener("click", () => {
-  signalMin = Infinity;
-  signalMax = -Infinity;
-  breathPhaseSensor = 0.5;
 });
 
 // ---------- Кольца (множители пользователя) ----------
@@ -219,7 +218,7 @@ function calcPointCoherence(globalCoherence, dx, dy, dist) {
   return clamp(effective, 0.0, 1.0);
 }
 
-// ---------- Датчик + эмуляция мышью ----------
+// ---------- Датчик ----------
 let sensorActive = false;
 let signalMin = Infinity;
 let signalMax = -Infinity;
@@ -263,10 +262,16 @@ function onMouseMove(e) {
   mouseY = e.clientY;
 }
 
-async function startSensor() {
-  if (sensorActive) return;
+// Запуск датчика по кнопке «Старт» (аналог IMU Monitor)
+async function handleStartSensor() {
+  if (sensorActive) {
+    // уже работает – остановим
+    stopSensor();
+    startSensorBtn.textContent = 'Старт';
+    return;
+  }
 
-  // Попытка использовать реальный гироскоп
+  // 1. Попытка использовать реальный гироскоп
   try {
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
       const permission = await DeviceMotionEvent.requestPermission();
@@ -274,7 +279,7 @@ async function startSensor() {
         throw new Error('Permission denied');
       }
     }
-    // Если метод не требуется или разрешение получено, включаем гироскоп
+    // Если разрешение получено (или метод не требуется), включаем гироскоп
     window.addEventListener('devicemotion', onDeviceMotion);
     sensorActive = true;
     useMouseEmulation = false;
@@ -284,14 +289,16 @@ async function startSensor() {
     smoothRot = 0;
     breathPeriods = [];
     lastPeakTime = 0;
+    startSensorBtn.textContent = 'Стоп';
+    calibrateBtn.style.display = 'inline-block';
     return;
   } catch (err) {
-    // Гироскоп недоступен – включаем эмуляцию мышью для десктопа
-    console.warn('Датчик недоступен, используется мышь:', err);
+    // Гироскоп недоступен (нет HTTPS, десктоп и т.п.)
+    console.warn('Гироскоп недоступен, включаем мышь:', err);
     window.removeEventListener('devicemotion', onDeviceMotion);
   }
 
-  // Если мы дошли сюда, запускаем эмуляцию мышью
+  // 2. Если не удалось – эмуляция мышью
   useMouseEmulation = true;
   window.addEventListener('mousemove', onMouseMove);
   sensorActive = true;
@@ -302,6 +309,8 @@ async function startSensor() {
   lastPeakTime = 0;
   mouseSmoothed = 0.5;
   sensorBreathValue.textContent = 'мышь';
+  startSensorBtn.textContent = 'Стоп';
+  calibrateBtn.style.display = 'inline-block';
 }
 
 function stopSensor() {
@@ -319,7 +328,18 @@ function stopSensor() {
   smoothRot = 0;
   breathPeriods = [];
   lastPeakTime = 0;
+  startSensorBtn.textContent = 'Старт';
+  calibrateBtn.style.display = 'inline-block'; // оставляем видимой, т.к. режим датчика
+  sensorBreathValue.textContent = '--';
 }
+
+startSensorBtn.addEventListener("click", handleStartSensor);
+
+calibrateBtn.addEventListener("click", () => {
+  signalMin = Infinity;
+  signalMax = -Infinity;
+  breathPhaseSensor = 0.5;
+});
 
 // ---------- Главный цикл ----------
 function render(time) {
@@ -336,8 +356,9 @@ function render(time) {
     const userBPM = parseFloat(breathRateSlider.value);
     const userFreq = userBPM / 60;
     userPhase = (Math.sin(time * 0.001 * Math.PI * 2 * userFreq) + 1) * 0.5;
+    if (sensorActive) stopSensor();
   } else {
-    // Режим датчика (или мышь)
+    // Режим датчика
     if (useMouseEmulation) {
       const targetPhase = clamp(1.0 - (mouseY / height), 0, 1);
       mouseSmoothed += (targetPhase - mouseSmoothed) * 0.1;
