@@ -214,79 +214,160 @@ function calcPointCoherence(globalCoherence, dx, dy, dist) {
   return clamp(effective, 0.0, 1.0);
 }
 
-// ---------- Работа с гироскопом ----------
+
+// ---------- Работа с датчиком (iPhone) ----------
 let sensorActive = false;
-let smoothedRotation = 0;   // сглаженная угловая скорость (beta)
+
+let smoothedBeta = 0;
 let signalMin = Infinity;
 let signalMax = -Infinity;
+
 let breathPhaseSensor = 0.5;
 
-// Периоды дыхания для расчёта BPM
+let prevPhase = 0.5;
 let lastPeakTime = 0;
 let breathPeriods = [];
 const MAX_PERIODS = 12;
 
-function onDeviceMotion(event) {
-  // rotationRate.beta — вращение вокруг оси X (наклон телефона вперёд/назад)
-  const rot = event.rotationRate?.beta || 0;
-  // Низкочастотный фильтр для сглаживания
-  const alpha = 0.08;
-  smoothedRotation += alpha * (rot - smoothedRotation);
+function onOrientation(event) {
 
-  // Адаптивная нормализация по бегущим мин/макс
-  if (smoothedRotation < signalMin) signalMin = smoothedRotation;
-  if (smoothedRotation > signalMax) signalMax = smoothedRotation;
+  if (event.beta == null) return;
+
+  const beta = event.beta;
+
+  const alpha = 0.03;
+
+  smoothedBeta += alpha * (beta - smoothedBeta);
+
+  if (smoothedBeta < signalMin) {
+    signalMin = smoothedBeta;
+  } else {
+    signalMin += (smoothedBeta - signalMin) * 0.0005;
+  }
+
+  if (smoothedBeta > signalMax) {
+    signalMax = smoothedBeta;
+  } else {
+    signalMax += (smoothedBeta - signalMax) * 0.0005;
+  }
 
   const range = signalMax - signalMin;
-  if (range > 0.02) {  // порог, чтобы избежать деления на ноль
-    breathPhaseSensor = clamp((smoothedRotation - signalMin) / range, 0, 1);
+
+  if (range > 1) {
+    breathPhaseSensor = clamp(
+      (smoothedBeta - signalMin) / range,
+      0,
+      1
+    );
   }
 
-  // Простой детектор пиков (пересечение 0.5 снизу вверх) для оценки BPM
-  if (breathPhaseSensor > 0.5 && lastPeakTime === 0) {
-    lastPeakTime = performance.now();
-  } else if (breathPhaseSensor > 0.5 && lastPeakTime > 0 && (performance.now() - lastPeakTime) > 1500) {
-    const period = performance.now() - lastPeakTime;
-    breathPeriods.push(period);
-    if (breathPeriods.length > MAX_PERIODS) breathPeriods.shift();
-    lastPeakTime = performance.now();
+  const now = performance.now();
+
+  if (
+    prevPhase < 0.65 &&
+    breathPhaseSensor >= 0.65
+  ) {
+
+    if (lastPeakTime > 0) {
+
+      const period = now - lastPeakTime;
+
+      if (
+        period > 2000 &&
+        period < 20000
+      ) {
+
+        breathPeriods.push(period);
+
+        if (breathPeriods.length > MAX_PERIODS) {
+          breathPeriods.shift();
+        }
+      }
+    }
+
+    lastPeakTime = now;
   }
+
+  prevPhase = breathPhaseSensor;
 }
 
-function startSensor() {
+async function startSensor() {
+
   if (sensorActive) return;
 
-  // Запрос разрешения (iOS)
-  if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-    DeviceMotionEvent.requestPermission()
-      .then(permissionState => {
-        if (permissionState === 'granted') {
-          window.addEventListener('devicemotion', onDeviceMotion);
-          sensorActive = true;
-        } else {
-          alert('Нет доступа к гироскопу');
-          modeSelect.value = 'sim';
-          modeSelect.dispatchEvent(new Event('change'));
-        }
-      })
-      .catch(console.error);
-  } else {
-    // Android, десктоп или старый iOS
-    window.addEventListener('devicemotion', onDeviceMotion);
+  try {
+
+    if (
+      typeof DeviceOrientationEvent !== "undefined" &&
+      typeof DeviceOrientationEvent.requestPermission === "function"
+    ) {
+
+      const permission =
+        await DeviceOrientationEvent.requestPermission();
+
+      if (permission !== "granted") {
+
+        alert("Нет доступа к датчикам");
+
+        modeSelect.value = "sim";
+        modeSelect.dispatchEvent(
+          new Event("change")
+        );
+
+        return;
+      }
+    }
+
+    window.addEventListener(
+      "deviceorientation",
+      onOrientation,
+      true
+    );
+
     sensorActive = true;
+
+  } catch (err) {
+
+    console.error(err);
+
+    alert("Ошибка доступа к датчику");
+
+    modeSelect.value = "sim";
+    modeSelect.dispatchEvent(
+      new Event("change")
+    );
   }
 }
 
 function stopSensor() {
+
   if (!sensorActive) return;
-  window.removeEventListener('devicemotion', onDeviceMotion);
+
+  window.removeEventListener(
+    "deviceorientation",
+    onOrientation,
+    true
+  );
+
   sensorActive = false;
+
+  smoothedBeta = 0;
+
   signalMin = Infinity;
   signalMax = -Infinity;
+
   breathPhaseSensor = 0.5;
+
+  prevPhase = 0.5;
+
   lastPeakTime = 0;
+
   breathPeriods = [];
+
+  sensorBreathValue.textContent =
+    "-- BPM";
 }
+
 
 // ---------- Рендер ----------
 function render(time) {
@@ -309,9 +390,9 @@ function render(time) {
     if (breathPeriods.length > 0) {
       const avgPeriod = breathPeriods.reduce((a,b)=>a+b,0) / breathPeriods.length;
       const bpm = 60000 / avgPeriod;
-      sensorBreathValue.textContent = bpm.toFixed(1) + ' BPM';
+      sensorBreathValue.textContent = bpm.toFixed(1) + " BPM β:" + smoothedBeta.toFixed(1);
     } else {
-      sensorBreathValue.textContent = '-- BPM';
+      sensorBreathValue.textContent = "β:" + smoothedBeta.toFixed(1);
     }
   }
 
