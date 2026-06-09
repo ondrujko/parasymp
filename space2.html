@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Parasymp — датчик как в IMU Monitor</title>
+  <title>Parasymp — надёжный датчик</title>
   <style>
     html, body {
       margin: 0;
@@ -123,16 +123,19 @@ coherenceSlider.addEventListener("input", () => coherenceValue.textContent = par
 breathRateSlider.addEventListener("input", () => breathRateValue.textContent = parseFloat(breathRateSlider.value).toFixed(1));
 guideRateSlider.addEventListener("input", () => guideRateValue.textContent = parseFloat(guideRateSlider.value).toFixed(1));
 
-modeSelect.addEventListener("change", () => {
+modeSelect.addEventListener("change", async () => {
   const isSensor = modeSelect.value === "sensor";
   userBreathGroup.style.display = isSensor ? "none" : "flex";
   sensorBreathGroup.style.display = isSensor ? "flex" : "none";
   calibrateBtn.style.display = isSensor ? "inline-block" : "none";
-  if (isSensor) startSensor(); else stopSensor();
+  if (isSensor) {
+    await startSensor();
+  } else {
+    stopSensor();
+  }
 });
 
 calibrateBtn.addEventListener("click", () => {
-  // сброс мин/макс для адаптивной нормализации
   signalMin = Infinity;
   signalMax = -Infinity;
   breathPhaseSensor = 0.5;
@@ -216,7 +219,7 @@ function calcPointCoherence(globalCoherence, dx, dy, dist) {
   return clamp(effective, 0.0, 1.0);
 }
 
-// ---------- Датчик (как в IMU Monitor) ----------
+// ---------- Датчик + эмуляция мышью ----------
 let sensorActive = false;
 let signalMin = Infinity;
 let signalMax = -Infinity;
@@ -225,23 +228,19 @@ let lastPeakTime = 0;
 let breathPeriods = [];
 const MAX_PERIODS = 12;
 
-// Сглаженное значение rotationRate.beta
 let smoothRot = 0;
-const ROT_ALPHA = 0.1;   // EMA-фактор для гироскопа
+const ROT_ALPHA = 0.1;
 let lastSensorTime = 0;
+let useMouseEmulation = false;
+let mouseY = height / 2;
+let mouseSmoothed = 0.5;
 
 function onDeviceMotion(e) {
   const now = performance.now();
-  const dt = Math.min(100, now - lastSensorTime); // на случай паузы
   lastSensorTime = now;
-
-  // Берём вращение вокруг оси X (наклон груди)
   const raw = e.rotationRate?.beta || 0;
-  
-  // Низкочастотный фильтр для сглаживания
   smoothRot += ROT_ALPHA * (raw - smoothRot);
 
-  // Адаптивная нормализация по мин/макс
   if (smoothRot < signalMin) signalMin = smoothRot;
   if (smoothRot > signalMax) signalMax = smoothRot;
 
@@ -250,7 +249,6 @@ function onDeviceMotion(e) {
     breathPhaseSensor = clamp((smoothRot - signalMin) / range, 0, 1);
   }
 
-  // Простой детектор периода (пересечение 0.5 снизу вверх)
   if (breathPhaseSensor > 0.5 && lastPeakTime === 0) {
     lastPeakTime = now;
   } else if (breathPhaseSensor > 0.5 && lastPeakTime > 0 && (now - lastPeakTime) > 1500) {
@@ -261,42 +259,60 @@ function onDeviceMotion(e) {
   }
 }
 
+function onMouseMove(e) {
+  mouseY = e.clientY;
+}
+
 async function startSensor() {
   if (sensorActive) return;
 
-  // Запрос разрешения (iOS 13+)
-  if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-    try {
-      const perm = await DeviceMotionEvent.requestPermission();
-      if (perm !== 'granted') {
-        alert('Нет доступа к датчикам движения');
-        modeSelect.value = 'sim';
-        modeSelect.dispatchEvent(new Event('change'));
-        return;
+  // Попытка использовать реальный гироскоп
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      const permission = await DeviceMotionEvent.requestPermission();
+      if (permission !== 'granted') {
+        throw new Error('Permission denied');
       }
-    } catch (err) {
-      alert('Ошибка запроса разрешения датчиков');
-      modeSelect.value = 'sim';
-      modeSelect.dispatchEvent(new Event('change'));
-      return;
     }
+    // Если метод не требуется или разрешение получено, включаем гироскоп
+    window.addEventListener('devicemotion', onDeviceMotion);
+    sensorActive = true;
+    useMouseEmulation = false;
+    lastSensorTime = performance.now();
+    signalMin = Infinity;
+    signalMax = -Infinity;
+    smoothRot = 0;
+    breathPeriods = [];
+    lastPeakTime = 0;
+    return;
+  } catch (err) {
+    // Гироскоп недоступен – включаем эмуляцию мышью для десктопа
+    console.warn('Датчик недоступен, используется мышь:', err);
+    window.removeEventListener('devicemotion', onDeviceMotion);
   }
 
-  // Подписываемся на событие
-  window.addEventListener('devicemotion', onDeviceMotion);
+  // Если мы дошли сюда, запускаем эмуляцию мышью
+  useMouseEmulation = true;
+  window.addEventListener('mousemove', onMouseMove);
   sensorActive = true;
-  lastSensorTime = performance.now();
   signalMin = Infinity;
   signalMax = -Infinity;
-  smoothRot = 0;
+  breathPhaseSensor = 0.5;
   breathPeriods = [];
   lastPeakTime = 0;
+  mouseSmoothed = 0.5;
+  sensorBreathValue.textContent = 'мышь';
 }
 
 function stopSensor() {
   if (!sensorActive) return;
-  window.removeEventListener('devicemotion', onDeviceMotion);
+  if (useMouseEmulation) {
+    window.removeEventListener('mousemove', onMouseMove);
+  } else {
+    window.removeEventListener('devicemotion', onDeviceMotion);
+  }
   sensorActive = false;
+  useMouseEmulation = false;
   signalMin = Infinity;
   signalMax = -Infinity;
   breathPhaseSensor = 0.5;
@@ -320,15 +336,19 @@ function render(time) {
     const userBPM = parseFloat(breathRateSlider.value);
     const userFreq = userBPM / 60;
     userPhase = (Math.sin(time * 0.001 * Math.PI * 2 * userFreq) + 1) * 0.5;
-    if (sensorActive) stopSensor();
   } else {
-    // Датчик
+    // Режим датчика (или мышь)
+    if (useMouseEmulation) {
+      const targetPhase = clamp(1.0 - (mouseY / height), 0, 1);
+      mouseSmoothed += (targetPhase - mouseSmoothed) * 0.1;
+      breathPhaseSensor = mouseSmoothed;
+    }
     userPhase = breathPhaseSensor;
     if (breathPeriods.length > 0) {
       const avg = breathPeriods.reduce((a,b) => a+b, 0) / breathPeriods.length;
       const bpm = 60000 / avg;
       sensorBreathValue.textContent = bpm.toFixed(1) + ' BPM';
-    } else {
+    } else if (!useMouseEmulation) {
       sensorBreathValue.textContent = '-- BPM';
     }
   }
