@@ -237,7 +237,7 @@ let mouseSmoothed = 0.5;
 function onDeviceMotion(e) {
   const now = performance.now();
   lastSensorTime = now;
-  const raw = e.rotationRate?.beta || 0;
+  const raw = e.rotationRate?.alpha || 0;
   smoothRot += ROT_ALPHA * (raw - smoothRot);
 
   if (smoothRot < signalMin) signalMin = smoothRot;
