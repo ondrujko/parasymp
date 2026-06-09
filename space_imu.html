@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Parasymp — гироскоп</title>
+  <title>Parasymp — датчик как в IMU Monitor</title>
   <style>
     html, body {
       margin: 0;
@@ -106,7 +106,7 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
-// UI
+// ---------- UI ----------
 const coherenceSlider = document.getElementById("coherenceSlider");
 const coherenceValue = document.getElementById("coherenceValue");
 const breathRateSlider = document.getElementById("breathRateSlider");
@@ -132,11 +132,13 @@ modeSelect.addEventListener("change", () => {
 });
 
 calibrateBtn.addEventListener("click", () => {
+  // сброс мин/макс для адаптивной нормализации
   signalMin = Infinity;
   signalMax = -Infinity;
+  breathPhaseSensor = 0.5;
 });
 
-// Кольца (с множителями)
+// ---------- Кольца (множители пользователя) ----------
 const ringsDef = [
   { count: 28*5, rMin: 55,  rMax: 110, dotMin: 6/5,  dotMax: 10/5, rotSpeed: 2.0 },
   { count: 32*5, rMin: 85,  rMax: 165, dotMin: 7/5,  dotMax: 10/5, rotSpeed: 1.0 },
@@ -214,162 +216,96 @@ function calcPointCoherence(globalCoherence, dx, dy, dist) {
   return clamp(effective, 0.0, 1.0);
 }
 
-
-// ---------- Работа с датчиком (iPhone) ----------
+// ---------- Датчик (как в IMU Monitor) ----------
 let sensorActive = false;
-
-let smoothedBeta = 0;
 let signalMin = Infinity;
 let signalMax = -Infinity;
-
 let breathPhaseSensor = 0.5;
-
-let prevPhase = 0.5;
 let lastPeakTime = 0;
 let breathPeriods = [];
 const MAX_PERIODS = 12;
 
-function onOrientation(event) {
+// Сглаженное значение rotationRate.beta
+let smoothRot = 0;
+const ROT_ALPHA = 0.1;   // EMA-фактор для гироскопа
+let lastSensorTime = 0;
 
-  if (event.beta == null) return;
+function onDeviceMotion(e) {
+  const now = performance.now();
+  const dt = Math.min(100, now - lastSensorTime); // на случай паузы
+  lastSensorTime = now;
 
-  const beta = event.beta;
+  // Берём вращение вокруг оси X (наклон груди)
+  const raw = e.rotationRate?.beta || 0;
+  
+  // Низкочастотный фильтр для сглаживания
+  smoothRot += ROT_ALPHA * (raw - smoothRot);
 
-  const alpha = 0.03;
-
-  smoothedBeta += alpha * (beta - smoothedBeta);
-
-  if (smoothedBeta < signalMin) {
-    signalMin = smoothedBeta;
-  } else {
-    signalMin += (smoothedBeta - signalMin) * 0.0005;
-  }
-
-  if (smoothedBeta > signalMax) {
-    signalMax = smoothedBeta;
-  } else {
-    signalMax += (smoothedBeta - signalMax) * 0.0005;
-  }
+  // Адаптивная нормализация по мин/макс
+  if (smoothRot < signalMin) signalMin = smoothRot;
+  if (smoothRot > signalMax) signalMax = smoothRot;
 
   const range = signalMax - signalMin;
-
-  if (range > 1) {
-    breathPhaseSensor = clamp(
-      (smoothedBeta - signalMin) / range,
-      0,
-      1
-    );
+  if (range > 0.02) {
+    breathPhaseSensor = clamp((smoothRot - signalMin) / range, 0, 1);
   }
 
-  const now = performance.now();
-
-  if (
-    prevPhase < 0.65 &&
-    breathPhaseSensor >= 0.65
-  ) {
-
-    if (lastPeakTime > 0) {
-
-      const period = now - lastPeakTime;
-
-      if (
-        period > 2000 &&
-        period < 20000
-      ) {
-
-        breathPeriods.push(period);
-
-        if (breathPeriods.length > MAX_PERIODS) {
-          breathPeriods.shift();
-        }
-      }
-    }
-
+  // Простой детектор периода (пересечение 0.5 снизу вверх)
+  if (breathPhaseSensor > 0.5 && lastPeakTime === 0) {
+    lastPeakTime = now;
+  } else if (breathPhaseSensor > 0.5 && lastPeakTime > 0 && (now - lastPeakTime) > 1500) {
+    const period = now - lastPeakTime;
+    breathPeriods.push(period);
+    if (breathPeriods.length > MAX_PERIODS) breathPeriods.shift();
     lastPeakTime = now;
   }
-
-  prevPhase = breathPhaseSensor;
 }
 
 async function startSensor() {
-
   if (sensorActive) return;
 
-  try {
-
-    if (
-      typeof DeviceOrientationEvent !== "undefined" &&
-      typeof DeviceOrientationEvent.requestPermission === "function"
-    ) {
-
-      const permission =
-        await DeviceOrientationEvent.requestPermission();
-
-      if (permission !== "granted") {
-
-        alert("Нет доступа к датчикам");
-
-        modeSelect.value = "sim";
-        modeSelect.dispatchEvent(
-          new Event("change")
-        );
-
+  // Запрос разрешения (iOS 13+)
+  if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+    try {
+      const perm = await DeviceMotionEvent.requestPermission();
+      if (perm !== 'granted') {
+        alert('Нет доступа к датчикам движения');
+        modeSelect.value = 'sim';
+        modeSelect.dispatchEvent(new Event('change'));
         return;
       }
+    } catch (err) {
+      alert('Ошибка запроса разрешения датчиков');
+      modeSelect.value = 'sim';
+      modeSelect.dispatchEvent(new Event('change'));
+      return;
     }
-
-    window.addEventListener(
-      "deviceorientation",
-      onOrientation,
-      true
-    );
-
-    sensorActive = true;
-
-  } catch (err) {
-
-    console.error(err);
-
-    alert("Ошибка доступа к датчику");
-
-    modeSelect.value = "sim";
-    modeSelect.dispatchEvent(
-      new Event("change")
-    );
   }
+
+  // Подписываемся на событие
+  window.addEventListener('devicemotion', onDeviceMotion);
+  sensorActive = true;
+  lastSensorTime = performance.now();
+  signalMin = Infinity;
+  signalMax = -Infinity;
+  smoothRot = 0;
+  breathPeriods = [];
+  lastPeakTime = 0;
 }
 
 function stopSensor() {
-
   if (!sensorActive) return;
-
-  window.removeEventListener(
-    "deviceorientation",
-    onOrientation,
-    true
-  );
-
+  window.removeEventListener('devicemotion', onDeviceMotion);
   sensorActive = false;
-
-  smoothedBeta = 0;
-
   signalMin = Infinity;
   signalMax = -Infinity;
-
   breathPhaseSensor = 0.5;
-
-  prevPhase = 0.5;
-
-  lastPeakTime = 0;
-
+  smoothRot = 0;
   breathPeriods = [];
-
-  sensorBreathValue.textContent =
-    "-- BPM";
+  lastPeakTime = 0;
 }
 
-
-// ---------- Рендер ----------
+// ---------- Главный цикл ----------
 function render(time) {
   ctx.clearRect(0, 0, width, height);
 
@@ -386,13 +322,14 @@ function render(time) {
     userPhase = (Math.sin(time * 0.001 * Math.PI * 2 * userFreq) + 1) * 0.5;
     if (sensorActive) stopSensor();
   } else {
+    // Датчик
     userPhase = breathPhaseSensor;
     if (breathPeriods.length > 0) {
-      const avgPeriod = breathPeriods.reduce((a,b)=>a+b,0) / breathPeriods.length;
-      const bpm = 60000 / avgPeriod;
-      sensorBreathValue.textContent = bpm.toFixed(1) + " BPM β:" + smoothedBeta.toFixed(1);
+      const avg = breathPeriods.reduce((a,b) => a+b, 0) / breathPeriods.length;
+      const bpm = 60000 / avg;
+      sensorBreathValue.textContent = bpm.toFixed(1) + ' BPM';
     } else {
-      sensorBreathValue.textContent = "β:" + smoothedBeta.toFixed(1);
+      sensorBreathValue.textContent = '-- BPM';
     }
   }
 
