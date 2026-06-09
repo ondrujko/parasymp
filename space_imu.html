@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Parasymp — два режима</title>
+  <title>Parasymp — гироскоп</title>
   <style>
     html, body {
       margin: 0;
@@ -106,7 +106,7 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
-// UI элементы
+// UI
 const coherenceSlider = document.getElementById("coherenceSlider");
 const coherenceValue = document.getElementById("coherenceValue");
 const breathRateSlider = document.getElementById("breathRateSlider");
@@ -119,7 +119,6 @@ const userBreathGroup = document.getElementById("userBreathGroup");
 const sensorBreathGroup = document.getElementById("sensorBreathGroup");
 const sensorBreathValue = document.getElementById("sensorBreathValue");
 
-// Обработчики UI
 coherenceSlider.addEventListener("input", () => coherenceValue.textContent = parseFloat(coherenceSlider.value).toFixed(2));
 breathRateSlider.addEventListener("input", () => breathRateValue.textContent = parseFloat(breathRateSlider.value).toFixed(1));
 guideRateSlider.addEventListener("input", () => guideRateValue.textContent = parseFloat(guideRateSlider.value).toFixed(1));
@@ -133,12 +132,11 @@ modeSelect.addEventListener("change", () => {
 });
 
 calibrateBtn.addEventListener("click", () => {
-  // Сброс мин/макс для перекалибровки
   signalMin = Infinity;
   signalMax = -Infinity;
 });
 
-// Кольца (с множителями пользователя)
+// Кольца (с множителями)
 const ringsDef = [
   { count: 28*5, rMin: 55,  rMax: 110, dotMin: 6/5,  dotMax: 10/5, rotSpeed: 2.0 },
   { count: 32*5, rMin: 85,  rMax: 165, dotMin: 7/5,  dotMax: 10/5, rotSpeed: 1.0 },
@@ -184,7 +182,6 @@ window.addEventListener("resize", () => {
 function smooth(t) {
   return 0.5 - 0.5 * Math.cos(Math.PI * t);
 }
-
 function clamp(val, min, max) {
   return Math.min(max, Math.max(min, val));
 }
@@ -206,88 +203,89 @@ initChaos();
 const centralMinRadius = 25;
 const centralMaxRadius = 60;
 
-// Изотропная когерентность
 function calcPointCoherence(globalCoherence, dx, dy, dist) {
   if (dist < 0.001) return 1.0;
   const cosA = dx / dist;
   const sinA = dy / dist;
   const edgeDist = Math.sqrt((halfW * cosA) ** 2 + (halfH * sinA) ** 2);
   const threshold = Math.pow(dist / edgeDist, 3);
-  if (threshold >= 0.999) {
-    return globalCoherence >= 1.0 ? 1.0 : 0.0;
-  }
+  if (threshold >= 0.999) return globalCoherence >= 1.0 ? 1.0 : 0.0;
   const effective = (globalCoherence - threshold) / (1.0 - threshold);
   return clamp(effective, 0.0, 1.0);
 }
 
-// ---------- Работа с датчиком ----------
+// ---------- Работа с гироскопом ----------
 let sensorActive = false;
-let smoothedBeta = 0;       // сглаженный угол beta
+let smoothedRotation = 0;   // сглаженная угловая скорость (beta)
 let signalMin = Infinity;
 let signalMax = -Infinity;
 let breathPhaseSensor = 0.5;
+
+// Периоды дыхания для расчёта BPM
 let lastPeakTime = 0;
-let breathPeriods = [];     // для расчёта BPM
+let breathPeriods = [];
 const MAX_PERIODS = 12;
-const MIN_BREATH_MS = 1500;
-const MAX_BREATH_MS = 10000;
 
-function onDeviceOrientation(event) {
-  // beta — угол наклона вперёд-назад (0-180), но в нашем положении он будет около 90°,
-  // отклонения при дыхании небольшие. Используем отклонение от 90.
-  const beta = event.beta || 0;
-  // Низкочастотный фильтр
-  const alpha = 0.05;
-  smoothedBeta += alpha * (beta - smoothedBeta);
+function onDeviceMotion(event) {
+  // rotationRate.beta — вращение вокруг оси X (наклон телефона вперёд/назад)
+  const rot = event.rotationRate?.beta || 0;
+  // Низкочастотный фильтр для сглаживания
+  const alpha = 0.08;
+  smoothedRotation += alpha * (rot - smoothedRotation);
 
-  // Обновляем мин/макс для адаптивной нормализации
-  if (smoothedBeta < signalMin) signalMin = smoothedBeta;
-  if (smoothedBeta > signalMax) signalMax = smoothedBeta;
+  // Адаптивная нормализация по бегущим мин/макс
+  if (smoothedRotation < signalMin) signalMin = smoothedRotation;
+  if (smoothedRotation > signalMax) signalMax = smoothedRotation;
 
-  // Нормализуем в 0..1 (инвертируем, чтобы вдох = увеличение)
   const range = signalMax - signalMin;
-  if (range > 0.1) {
-    breathPhaseSensor = clamp((smoothedBeta - signalMin) / range, 0, 1);
+  if (range > 0.02) {  // порог, чтобы избежать деления на ноль
+    breathPhaseSensor = clamp((smoothedRotation - signalMin) / range, 0, 1);
   }
 
-  // Простейший детектор пиков для оценки периода (по нарастанию)
-  // Здесь можно усложнить, но пока оставим базовый подсчёт BPM через пересечение середины
-  // Для плавности BPM будем считать по времени между соседними "вдохами" (переход через 0.5 снизу вверх)
-  // Реализуем позже, если нужно. Пока показываем BPM = 0, чтобы не усложнять.
-  // Но добавим простую оценку: если breathPhaseSensor пересекает 0.5 снизу вверх, фиксируем пик
-  // (заглушка, можно улучшить)
+  // Простой детектор пиков (пересечение 0.5 снизу вверх) для оценки BPM
+  if (breathPhaseSensor > 0.5 && lastPeakTime === 0) {
+    lastPeakTime = performance.now();
+  } else if (breathPhaseSensor > 0.5 && lastPeakTime > 0 && (performance.now() - lastPeakTime) > 1500) {
+    const period = performance.now() - lastPeakTime;
+    breathPeriods.push(period);
+    if (breathPeriods.length > MAX_PERIODS) breathPeriods.shift();
+    lastPeakTime = performance.now();
+  }
 }
 
 function startSensor() {
   if (sensorActive) return;
-  // Запрос разрешения (для iOS)
-  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-    DeviceOrientationEvent.requestPermission()
+
+  // Запрос разрешения (iOS)
+  if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+    DeviceMotionEvent.requestPermission()
       .then(permissionState => {
         if (permissionState === 'granted') {
-          window.addEventListener('deviceorientation', onDeviceOrientation);
+          window.addEventListener('devicemotion', onDeviceMotion);
           sensorActive = true;
         } else {
-          alert('Нет доступа к датчикам ориентации');
+          alert('Нет доступа к гироскопу');
           modeSelect.value = 'sim';
           modeSelect.dispatchEvent(new Event('change'));
         }
       })
       .catch(console.error);
   } else {
-    window.addEventListener('deviceorientation', onDeviceOrientation);
+    // Android, десктоп или старый iOS
+    window.addEventListener('devicemotion', onDeviceMotion);
     sensorActive = true;
   }
 }
 
 function stopSensor() {
   if (!sensorActive) return;
-  window.removeEventListener('deviceorientation', onDeviceOrientation);
+  window.removeEventListener('devicemotion', onDeviceMotion);
   sensorActive = false;
-  // Сброс калибровки
   signalMin = Infinity;
   signalMax = -Infinity;
   breathPhaseSensor = 0.5;
+  lastPeakTime = 0;
+  breathPeriods = [];
 }
 
 // ---------- Рендер ----------
@@ -299,18 +297,15 @@ function render(time) {
   const guideFreq = guideBPM / 60;
   const guidePhase = (Math.sin(time * 0.001 * Math.PI * 2 * guideFreq) + 1) * 0.5;
 
-  // Определяем фазу пользователя
   let userPhase;
   const mode = modeSelect.value;
   if (mode === 'sim') {
     const userBPM = parseFloat(breathRateSlider.value);
     const userFreq = userBPM / 60;
     userPhase = (Math.sin(time * 0.001 * Math.PI * 2 * userFreq) + 1) * 0.5;
-    if (sensorActive) stopSensor(); // на всякий случай
+    if (sensorActive) stopSensor();
   } else {
-    // Датчик
     userPhase = breathPhaseSensor;
-    // Отображаем BPM (заглушка, можно вычислить по периодам)
     if (breathPeriods.length > 0) {
       const avgPeriod = breathPeriods.reduce((a,b)=>a+b,0) / breathPeriods.length;
       const bpm = 60000 / avgPeriod;
@@ -322,7 +317,7 @@ function render(time) {
 
   const easedUser = smooth(userPhase);
 
-  // Обновление хаотичных позиций
+  // Хаос
   const tSec = time * 0.001;
   for (let i = 0; i < particles.length; i++) {
     const cs = chaosState[i];
@@ -332,7 +327,7 @@ function render(time) {
     cs.currentY = clamp(cs.baseY + driftY, 0, height);
   }
 
-  // Рисуем точки
+  // Точки
   for (let i = 0; i < particles.length; i++) {
     const p = particles[i];
     const ring = ringsDef[p.ringIdx];
@@ -340,8 +335,7 @@ function render(time) {
 
     const dx = cs.currentX - centerX;
     const dy = cs.currentY - centerY;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-
+    const dist = Math.sqrt(dx*dx + dy*dy);
     const pointCoherence = calcPointCoherence(globalCoherence, dx, dy, dist);
 
     const radius = ring.rMin + (ring.rMax - ring.rMin) * easedUser;
@@ -359,21 +353,19 @@ function render(time) {
     const glow = dotSize * (1.0 + pointCoherence * 2.5);
 
     ctx.beginPath();
-    ctx.arc(x, y, dotSize, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(${shade}, ${shade}, ${shade}, ${alpha})`;
-    ctx.shadowColor = `rgba(${shade}, ${shade}, ${shade}, ${alpha * 0.6})`;
+    ctx.arc(x, y, dotSize, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(${shade},${shade},${shade},${alpha})`;
+    ctx.shadowColor = `rgba(${shade},${shade},${shade},${alpha*0.6})`;
     ctx.shadowBlur = glow;
     ctx.fill();
   }
 
-  // Сброс тени
   ctx.shadowColor = "transparent";
   ctx.shadowBlur = 0;
 
-  // Центральный гид
   const centralRadius = centralMinRadius + (centralMaxRadius - centralMinRadius) * guidePhase;
   ctx.beginPath();
-  ctx.arc(centerX, centerY, centralRadius, 0, Math.PI * 2);
+  ctx.arc(centerX, centerY, centralRadius, 0, Math.PI*2);
   ctx.fillStyle = "#ffffff";
   ctx.fill();
 
