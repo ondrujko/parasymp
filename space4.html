@@ -3,11 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- Цвет фона для строки состояния и панели навигации (важно для PWA) -->
   <meta name="theme-color" content="#000000">
-  <!-- Стиль строки состояния в PWA: чёрный полупрозрачный (сливается с твоим чёрным фоном) -->
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <!-- Явно говорим браузеру, что страница поддерживает тёмную цветовую схему -->
   <meta name="color-scheme" content="dark">
   <title>Parasymp</title>
   <style>
@@ -24,7 +21,6 @@
       width: 100vw;
       height: 100vh;
     }
-    /* Панель управления */
     #ui {
       position: fixed;
       bottom: 20px;
@@ -54,17 +50,9 @@
       align-items: center;
       gap: 4px;
     }
-    .slider-group label {
-      font-size: 0.8em;
-      opacity: 0.8;
-    }
-    .slider-group span {
-      font-size: 0.9em;
-      font-weight: bold;
-    }
-    input[type=range] {
-      width: 100px;
-    }
+    .slider-group label { font-size: 0.8em; opacity: 0.8; }
+    .slider-group span { font-size: 0.9em; font-weight: bold; }
+    input[type=range] { width: 100px; }
     select, button {
       padding: 6px 14px;
       border-radius: 20px;
@@ -74,14 +62,8 @@
       font-size: 14px;
       cursor: pointer;
     }
-    select:hover, button:hover {
-      background: rgba(255,255,255,0.25);
-    }
-    button.primary {
-      background: rgba(100,150,255,0.3);
-      border-color: rgba(100,150,255,0.6);
-    }
-    /* Кнопка сворачивания */
+    select:hover, button:hover { background: rgba(255,255,255,0.25); }
+    button.primary { background: rgba(100,150,255,0.3); border-color: rgba(100,150,255,0.6); }
     #toggleBtn {
       position: fixed;
       bottom: 20px;
@@ -109,8 +91,6 @@
 </head>
 <body>
 <canvas id="canvas"></canvas>
-
-<!-- Кнопка сворачивания/разворачивания -->
 <button id="toggleBtn" title="Свернуть панель">⚙</button>
 
 <div id="ui">
@@ -174,17 +154,11 @@ const sensorBreathValue = document.getElementById("sensorBreathValue");
 const toggleBtn = document.getElementById("toggleBtn");
 const uiPanel = document.getElementById("ui");
 
-// Сворачивание / разворачивание
 let panelVisible = true;
 toggleBtn.addEventListener("click", () => {
   panelVisible = !panelVisible;
-  if (panelVisible) {
-    uiPanel.classList.remove("collapsed");
-    toggleBtn.textContent = "⚙";
-  } else {
-    uiPanel.classList.add("collapsed");
-    toggleBtn.textContent = "⚙";
-  }
+  uiPanel.classList.toggle("collapsed", !panelVisible);
+  toggleBtn.textContent = panelVisible ? "⚙" : "⚙";
 });
 
 coherenceSlider.addEventListener("input", () => coherenceValue.textContent = parseFloat(coherenceSlider.value).toFixed(2));
@@ -198,12 +172,10 @@ modeSelect.addEventListener("change", () => {
   startSensorBtn.style.display = isSensor ? "inline-block" : "none";
   calibrateBtn.style.display = isSensor ? "inline-block" : "none";
   axisSelect.style.display = isSensor ? "inline-block" : "none";
-  if (!isSensor) {
-    stopSensor();
-  }
+  if (!isSensor) stopSensor();
 });
 
-// ---------- Кольца (множители пользователя) ----------
+// ---------- Кольца ----------
 const ringsDef = [
   { count: 28*5, rMin: 55,  rMax: 110, dotMin: 6/5,  dotMax: 10/5, rotSpeed: 2.0 },
   { count: 32*5, rMin: 85,  rMax: 165, dotMin: 7/5,  dotMax: 10/5, rotSpeed: 1.0 },
@@ -213,7 +185,6 @@ const ringsDef = [
 
 const particles = [];
 const chaosState = [];
-
 ringsDef.forEach((ring, ringIdx) => {
   for (let i = 0; i < ring.count; i++) {
     const angle = (Math.PI * 2 * i) / ring.count;
@@ -226,9 +197,7 @@ ringsDef.forEach((ring, ringIdx) => {
   }
 });
 
-let width, height, centerX, centerY;
-let halfW, halfH;
-
+let width, height, centerX, centerY, halfW, halfH;
 function resize() {
   canvas.width = window.innerWidth * window.devicePixelRatio;
   canvas.height = window.innerHeight * window.devicePixelRatio;
@@ -241,17 +210,10 @@ function resize() {
   halfH = height * 0.5;
 }
 resize();
-window.addEventListener("resize", () => {
-  resize();
-  initChaos();
-});
+window.addEventListener("resize", () => { resize(); initChaos(); });
 
-function smooth(t) {
-  return 0.5 - 0.5 * Math.cos(Math.PI * t);
-}
-function clamp(val, min, max) {
-  return Math.min(max, Math.max(min, val));
-}
+function smooth(t) { return 0.5 - 0.5 * Math.cos(Math.PI * t); }
+function clamp(val, min, max) { return Math.min(max, Math.max(min, val)); }
 
 function initChaos() {
   chaosState.length = 0;
@@ -272,8 +234,7 @@ const centralMaxRadius = 60;
 
 function calcPointCoherence(globalCoherence, dx, dy, dist) {
   if (dist < 0.001) return 1.0;
-  const cosA = dx / dist;
-  const sinA = dy / dist;
+  const cosA = dx / dist, sinA = dy / dist;
   const edgeDist = Math.sqrt((halfW * cosA) ** 2 + (halfH * sinA) ** 2);
   const threshold = Math.pow(dist / edgeDist, 3);
   if (threshold >= 0.999) return globalCoherence >= 1.0 ? 1.0 : 0.0;
@@ -281,22 +242,18 @@ function calcPointCoherence(globalCoherence, dx, dy, dist) {
   return clamp(effective, 0.0, 1.0);
 }
 
-// ---------- Вспомогательные функции для комплексных чисел ----------
+// ---------- Комплексная арифметика для проектирования фильтра ----------
 function cadd(a, b) { return [a[0] + b[0], a[1] + b[1]]; }
 function csub(a, b) { return [a[0] - b[0], a[1] - b[1]]; }
-function cmul(a, b) {
-  return [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]];
-}
+function cmul(a, b) { return [a[0]*b[0] - a[1]*b[1], a[0]*b[1] + a[1]*b[0]]; }
 function cdiv(a, b) {
-  const den = b[0] * b[0] + b[1] * b[1];
-  return [(a[0] * b[0] + a[1] * b[1]) / den, (a[1] * b[0] - a[0] * b[1]) / den];
+  const den = b[0]*b[0] + b[1]*b[1];
+  return [(a[0]*b[0] + a[1]*b[1])/den, (a[1]*b[0] - a[0]*b[1])/den];
 }
 function csqrt(a) {
   const [x, y] = a;
-  const r = Math.sqrt(x * x + y * y);
-  const re = Math.sqrt((r + x) / 2);
-  const im = y >= 0 ? Math.sqrt((r - x) / 2) : -Math.sqrt((r - x) / 2);
-  return [re, im];
+  const r = Math.sqrt(x*x + y*y);
+  return [Math.sqrt((r + x)/2), y >= 0 ? Math.sqrt((r - x)/2) : -Math.sqrt((r - x)/2)];
 }
 
 // ---------- Класс полосового фильтра Баттерворта 4-го порядка (SOS, Direct Form II Transposed) ----------
@@ -304,13 +261,13 @@ class ButterworthBandpass {
   constructor() {
     this.lowFreq = 0.05;
     this.highFreq = 0.5;
-    this.fs = 0;                // текущая частота дискретизации
-    this.lastTimestamp = null;  // для автоматического определения dt
-    this.sos = [];              // массив секций: { b0, b1, b2, a1, a2 }
-    this.states = [];           // состояния для каждой секции [d1, d2]
+    this.fs = 0;
+    this.lastTimestamp = null;
+    this.sos = [];        // массив {b0,b1,b2,a1,a2}
+    this.states = [];     // [d1,d2] для каждой секции
   }
 
-  // Проектирование фильтра под новую частоту дискретизации fs (Гц)
+  // Проектирование фильтра Баттерворта под частоту дискретизации fs
   design(fs) {
     this.fs = fs;
     const fNyq = fs / 2;
@@ -323,157 +280,143 @@ class ButterworthBandpass {
       return;
     }
 
-    // Предыскажение частот (frequency warping)
+    // Предыскажение аналоговых частот
     const W1 = Math.tan(Math.PI * fLow / fs);
     const W2 = Math.tan(Math.PI * fHigh / fs);
     const BW = W2 - W1;
     const W0 = Math.sqrt(W1 * W2);
 
-    // Полюсы нормированного ФНЧ Баттерворта 2-го порядка (прототип 2-го порядка -> ПФ 4-го порядка)
-    const poles = [
+    // Полюсы нормированного ФНЧ Баттерворта 2-го порядка
+    const prototypePoles = [
       [-0.7071067811865476,  0.7071067811865476],
       [-0.7071067811865476, -0.7071067811865476]
     ];
 
-    // Преобразование полюсов ФНЧ в полюсы аналогового ПФ
+    // Преобразование ФНЧ -> ПФ (s -> (s^2 + W0^2)/(BW * s))
     const analogPoles = [];
-    for (let [pr, pi] of poles) {
-      const p = [pr, pi];
-      const halfBwP = cmul([BW / 2, 0], p);            // (BW/2)*p
-      const halfBwP_sq = cmul(halfBwP, halfBwP);       // ((BW/2)*p)^2
-      const disc = csub(halfBwP_sq, [W0 * W0, 0]);     // ((BW/2)*p)^2 - W0^2
-      const sqrtDisc = csqrt(disc);
-      const sp1 = cadd(halfBwP, sqrtDisc);
-      const sp2 = csub(halfBwP, sqrtDisc);
-      analogPoles.push(sp1, sp2);
+    for (let [pr, pi] of prototypePoles) {
+      const Bp = cmul([BW/2, 0], [pr, pi]);            // (BW/2)*p
+      const Bp2 = cmul(Bp, Bp);                        // (BW/2)^2 * p^2
+      const D = csub(Bp2, [W0*W0, 0]);                 // (BW/2*p)^2 - W0^2
+      const sqrtD = csqrt(D);
+      const s1 = cadd(Bp, sqrtD);
+      const s2 = csub(Bp, sqrtD);
+      analogPoles.push(s1, s2);
     }
 
-    // Билинейное преобразование аналоговых полюсов в цифровые: z = (1+sp)/(1-sp)
-    const zpoles = analogPoles.map(sp => {
-      const num = cadd([1, 0], sp);
-      const den = csub([1, 0], sp);
-      return cdiv(num, den);
+    // Билинейное преобразование: z = (1 + s)/(1 - s)
+    const zpoles = analogPoles.map(s => {
+      return cdiv(cadd([1,0], s), csub([1,0], s));
     });
 
-    // Группировка комплексно-сопряжённых полюсов в биквадратные секции
-    const sosSections = [];
+    // Группировка в комплексно-сопряжённые пары → SOS-секции
+    const sections = [];
     const used = new Array(zpoles.length).fill(false);
     for (let i = 0; i < zpoles.length; i++) {
       if (used[i]) continue;
       const zi = zpoles[i];
-      if (Math.abs(zi[1]) < 1e-12) continue; // вещественный полюс (не должно случиться)
-      // Поиск сопряжённого полюса
-      for (let j = i + 1; j < zpoles.length; j++) {
+      if (Math.abs(zi[1]) < 1e-12) continue;
+      for (let j = i+1; j < zpoles.length; j++) {
         if (used[j]) continue;
-        if (Math.abs(zpoles[j][0] - zi[0]) < 1e-7 && Math.abs(zpoles[j][1] + zi[1]) < 1e-7) {
-          const [zr, zi_] = zi;
-          const a1 = -2 * zr;
-          const a2 = zr * zr + zi_ * zi_;
-          // Секция с нулями в z=1 и z=-1 (числитель 1 - z^-2)
-          sosSections.push({ b0: 1, b1: 0, b2: -1, a1, a2 });
+        const zj = zpoles[j];
+        if (Math.abs(zi[0] - zj[0]) < 1e-7 && Math.abs(zi[1] + zj[1]) < 1e-7) {
+          // пара комплексно-сопряжённых полюсов -> одна секция
+          const a1 = -2 * zi[0];
+          const a2 = zi[0]*zi[0] + zi[1]*zi[1];
+          // нули секции: z = ±1 (b0=1, b1=0, b2=-1)
+          sections.push({ b0: 1, b1: 0, b2: -1, a1, a2 });
           used[i] = used[j] = true;
           break;
         }
       }
     }
 
-    if (sosSections.length !== 2) {
-      // fallback
+    if (sections.length !== 2) {
+      // fallback, если что-то пошло не так
       this.sos = [{ b0: 1, b1: 0, b2: 0, a1: 0, a2: 0 }];
-      this.states = [[0, 0]];
+      this.states = [[0,0]];
       return;
     }
 
-    // Нормализация усиления на центральной частоте
+    // Нормировка усиления на центральной частоте f0 = sqrt(fLow*fHigh)
     const f0 = Math.sqrt(fLow * fHigh);
     const w0 = 2 * Math.PI * f0 / fs;
-    let totalMag = 1.0;
-    for (let sec of sosSections) {
+    let unnormGain = 1.0;
+    for (let sec of sections) {
       const { a1, a2 } = sec;
       const cosw = Math.cos(w0);
       const sinw = Math.sin(w0);
-      const cos2w = Math.cos(2 * w0);
-      const sin2w = Math.sin(2 * w0);
-      // числитель (1 - z^{-2})
+      const cos2w = Math.cos(2*w0);
+      const sin2w = Math.sin(2*w0);
+      // числитель 1 - z^{-2}
       const numRe = 1 - cos2w;
       const numIm = sin2w;
-      // знаменатель (1 + a1*z^{-1} + a2*z^{-2})
+      // знаменатель 1 + a1 z^{-1} + a2 z^{-2}
       const denRe = 1 + a1 * cosw + a2 * cos2w;
       const denIm = -a1 * sinw - a2 * sin2w;
-      const mag = Math.sqrt(numRe * numRe + numIm * numIm) /
-                  Math.sqrt(denRe * denRe + denIm * denIm);
-      totalMag *= mag;
+      const mag = Math.sqrt(numRe*numRe + numIm*numIm) /
+                  Math.sqrt(denRe*denRe + denIm*denIm);
+      unnormGain *= mag;
     }
-    const scale = 1 / totalMag;
-    for (let sec of sosSections) {
-      sec.b0 *= scale;
-      sec.b2 *= scale;
-    }
+    const k = 1 / unnormGain;
 
-    this.sos = sosSections;
-    this.states = sosSections.map(() => [0, 0]);
+    // Масштабируем только первую секцию, чтобы избежать переполнения
+    sections[0].b0 *= k;
+    sections[0].b2 *= k;
+    this.sos = sections;
+    this.states = sections.map(() => [0, 0]);
   }
 
-  // Обработка одного отсчёта (sample – значение, timestamp – performance.now() в мс)
   process(sample, timestamp) {
-    // Автоматическое определение и обновление частоты дискретизации
     if (this.lastTimestamp !== null) {
-      const dt = (timestamp - this.lastTimestamp) / 1000; // секунды
+      const dt = (timestamp - this.lastTimestamp) / 1000;
       if (dt > 0 && dt < 1) {
         let fs = 1 / dt;
-        fs = clamp(fs, 20, 200); // ограничение стабильности
-        if (Math.abs(fs - this.fs) / Math.max(this.fs, 1) > 0.05 || this.sos.length === 0) {
+        fs = clamp(fs, 20, 200);
+        // перепроектируем только при изменении > 10%
+        if (Math.abs(fs - this.fs) / Math.max(this.fs, 1) > 0.1 || this.sos.length === 0) {
           this.design(fs);
         }
       }
     }
     this.lastTimestamp = timestamp;
 
-    // Прямая фильтрация (Direct Form II Transposed)
+    // Direct Form II Transposed
     let y = sample;
     for (let i = 0; i < this.sos.length; i++) {
       const sec = this.sos[i];
-      const st = this.states[i];
-      let d1 = st[0];
-      let d2 = st[1];
+      const [d1, d2] = this.states[i];
       const w = y;
       y = sec.b0 * w + d1;
-      d1 = sec.b1 * w - sec.a1 * y + d2;
-      d2 = sec.b2 * w - sec.a2 * y;
-      st[0] = d1;
-      st[1] = d2;
+      const new_d1 = sec.b1 * w - sec.a1 * y + d2;
+      const new_d2 = sec.b2 * w - sec.a2 * y;
+      this.states[i] = [new_d1, new_d2];
     }
     return y;
   }
 }
 
-// ---------- Класс адаптивной нормализации по окну последних 5 секунд ----------
+// ---------- Адаптивная нормализация по окну 5 секунд ----------
 class AdaptiveNormalizer {
   constructor(windowMs = 5000) {
     this.windowMs = windowMs;
-    this.buffer = []; // { t: timestamp, v: value }
+    this.buffer = [];
   }
-
   process(value, timestamp) {
-    // Добавляем новый отсчёт
     this.buffer.push({ t: timestamp, v: value });
-    // Удаляем всё, что старше windowMs
     const now = timestamp;
-    while (this.buffer.length > 0 && now - this.buffer[0].t > this.windowMs) {
+    while (this.buffer.length && now - this.buffer[0].t > this.windowMs) {
       this.buffer.shift();
     }
     if (this.buffer.length === 0) return 0.5;
-
     let min = Infinity, max = -Infinity;
-    for (let item of this.buffer) {
-      if (item.v < min) min = item.v;
-      if (item.v > max) max = item.v;
+    for (let { v } of this.buffer) {
+      if (v < min) min = v;
+      if (v > max) max = v;
     }
     const range = max - min;
     if (range < 1e-6) return 0.5;
-
-    let phase = (value - min) / range;
-    return clamp(phase, 0, 1);
+    return clamp((value - min) / range, 0, 1);
   }
 }
 
@@ -488,11 +431,9 @@ let useMouseEmulation = false;
 let mouseY = height / 2;
 let mouseSmoothed = 0.5;
 
-// Экземпляры фильтра и нормализатора (создаются при старте реального датчика)
 let bandpass = null;
 let normalizer = null;
 
-// Функция извлечения сырого значения в зависимости от выбранной оси
 function getRawSensorValue(e) {
   const axis = axisSelect.value;
   switch (axis) {
@@ -511,11 +452,9 @@ function onDeviceMotion(e) {
   const raw = getRawSensorValue(e);
   if (!bandpass || !normalizer) return;
 
-  // Фильтрация и адаптивная нормализация
   const filtered = bandpass.process(raw, now);
   breathPhaseSensor = normalizer.process(filtered, now);
 
-  // Обнаружение пиков для BPM (без изменений)
   if (breathPhaseSensor > 0.5 && lastPeakTime === 0) {
     lastPeakTime = now;
   } else if (breathPhaseSensor > 0.5 && lastPeakTime > 0 && (now - lastPeakTime) > 1500) {
@@ -526,9 +465,7 @@ function onDeviceMotion(e) {
   }
 }
 
-function onMouseMove(e) {
-  mouseY = e.clientY;
-}
+function onMouseMove(e) { mouseY = e.clientY; }
 
 async function handleStartSensor() {
   if (sensorActive) {
@@ -536,18 +473,14 @@ async function handleStartSensor() {
     startSensorBtn.textContent = 'Старт';
     return;
   }
-
   try {
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
       const permission = await DeviceMotionEvent.requestPermission();
-      if (permission !== 'granted') {
-        throw new Error('Permission denied');
-      }
+      if (permission !== 'granted') throw new Error('Permission denied');
     }
     window.addEventListener('devicemotion', onDeviceMotion);
     sensorActive = true;
     useMouseEmulation = false;
-    // Инициализация фильтра и нормализатора
     bandpass = new ButterworthBandpass();
     normalizer = new AdaptiveNormalizer(5000);
     breathPeriods = [];
@@ -559,8 +492,7 @@ async function handleStartSensor() {
     console.warn('Гироскоп/акселерометр недоступен, включаем мышь:', err);
     window.removeEventListener('devicemotion', onDeviceMotion);
   }
-
-  // Эмуляция мышью (фильтр не используется)
+  // Эмуляция мышью
   useMouseEmulation = true;
   window.addEventListener('mousemove', onMouseMove);
   sensorActive = true;
@@ -595,10 +527,8 @@ function stopSensor() {
 }
 
 startSensorBtn.addEventListener("click", handleStartSensor);
-
 calibrateBtn.addEventListener("click", () => {
   if (sensorActive && !useMouseEmulation) {
-    // Полный сброс фильтра и нормализатора
     bandpass = new ButterworthBandpass();
     normalizer = new AdaptiveNormalizer(5000);
   }
@@ -611,7 +541,6 @@ calibrateBtn.addEventListener("click", () => {
 // ---------- Главный цикл ----------
 function render(time) {
   ctx.clearRect(0, 0, width, height);
-
   const globalCoherence = parseFloat(coherenceSlider.value);
   const guideBPM = parseFloat(guideRateSlider.value);
   const guideFreq = guideBPM / 60;
@@ -626,7 +555,7 @@ function render(time) {
     if (sensorActive) stopSensor();
   } else {
     if (useMouseEmulation) {
-      const targetPhase = clamp(1.0 - (mouseY / height), 0, 1);
+      const targetPhase = clamp(1.0 - mouseY / height, 0, 1);
       mouseSmoothed += (targetPhase - mouseSmoothed) * 0.1;
       breathPhaseSensor = mouseSmoothed;
     }
@@ -657,7 +586,6 @@ function render(time) {
     const p = particles[i];
     const ring = ringsDef[p.ringIdx];
     const cs = chaosState[i];
-
     const dx = cs.currentX - centerX;
     const dy = cs.currentY - centerY;
     const dist = Math.sqrt(dx*dx + dy*dy);
