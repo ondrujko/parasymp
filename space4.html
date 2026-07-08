@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Цвет фона для строки состояния и панели навигации (важно для PWA) -->
+  <meta name="theme-color" content="#000000">
+  <!-- Стиль строки состояния в PWA: чёрный полупрозрачный (сливается с твоим чёрным фоном) -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <!-- Явно говорим браузеру, что страница поддерживает тёмную цветовую схему -->
+  <meta name="color-scheme" content="dark">
+  <title>Parasymp</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: 'Segoe UI', sans-serif;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+    /* Панель управления */
+    #ui {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 20px;
+      align-items: center;
+      justify-content: center;
+      background: rgba(20,20,30,0.8);
+      padding: 12px 24px;
+      border-radius: 40px;
+      color: #fff;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+      transition: opacity 0.3s, transform 0.3s;
+    }
+    #ui.collapsed {
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(-50%) translateY(20px);
+    }
+    .slider-group {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+    .slider-group label {
+      font-size: 0.8em;
+      opacity: 0.8;
+    }
+    .slider-group span {
+      font-size: 0.9em;
+      font-weight: bold;
+    }
+    input[type=range] {
+      width: 100px;
+    }
+    select, button {
+      padding: 6px 14px;
+      border-radius: 20px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    select:hover, button:hover {
+      background: rgba(255,255,255,0.25);
+    }
+    button.primary {
+      background: rgba(100,150,255,0.3);
+      border-color: rgba(100,150,255,0.6);
+    }
+    /* Кнопка сворачивания */
+    #toggleBtn {
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(20,20,30,0.8);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: white;
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 100;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    }
+    @media (max-width: 600px) {
+      #ui { flex-direction: column; gap: 8px; padding: 10px 20px; }
+      input[type=range] { width: 80px; }
+    }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<!-- Кнопка сворачивания/разворачивания -->
+<button id="toggleBtn" title="Свернуть панель">⚙</button>
+
+<div id="ui">
+  <div class="slider-group">
+    <label>Хаос ↔ Когерентность</label>
+    <input type="range" id="coherenceSlider" min="0" max="1" step="0.01" value="0.5">
+    <span id="coherenceValue">0.50</span>
+  </div>
+  <div class="slider-group" id="userBreathGroup">
+    <label>Дыхание пользователя (вдох/мин)</label>
+    <input type="range" id="breathRateSlider" min="3" max="18" step="0.5" value="6">
+    <span id="breathRateValue">6.0</span>
+  </div>
+  <div class="slider-group" id="sensorBreathGroup" style="display: none;">
+    <label>Ваше дыхание</label>
+    <span id="sensorBreathValue">--</span>
+  </div>
+  <div class="slider-group">
+    <label>Ритм-гид (вдох/мин)</label>
+    <input type="range" id="guideRateSlider" min="3" max="18" step="0.5" value="6">
+    <span id="guideRateValue">6.0</span>
+  </div>
+  <div style="display: flex; gap: 8px; align-items: center;">
+    <label>Режим:</label>
+    <select id="modeSelect">
+      <option value="sim">Симуляция</option>
+      <option value="sensor">Датчик</option>
+    </select>
+    <label>Источник:</label>
+    <select id="axisSelect" style="display:none;">
+      <option value="gyro_beta">Гироскоп β (X)</option>
+      <option value="gyro_gamma">Гироскоп γ (Y)</option>
+      <option value="gyro_alpha">Гироскоп α (Z)</option>
+      <option value="accel_x">Акселерометр X</option>
+      <option value="accel_y">Акселерометр Y</option>
+      <option value="accel_z">Акселерометр Z</option>
+    </select>
+    <button id="startSensorBtn" class="primary" style="display:none;">Старт</button>
+    <button id="calibrateBtn" style="display:none;">Сброс</button>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+// ---------- UI ----------
+const coherenceSlider = document.getElementById("coherenceSlider");
+const coherenceValue = document.getElementById("coherenceValue");
+const breathRateSlider = document.getElementById("breathRateSlider");
+const breathRateValue = document.getElementById("breathRateValue");
+const guideRateSlider = document.getElementById("guideRateSlider");
+const guideRateValue = document.getElementById("guideRateValue");
+const modeSelect = document.getElementById("modeSelect");
+const axisSelect = document.getElementById("axisSelect");
+const startSensorBtn = document.getElementById("startSensorBtn");
+const calibrateBtn = document.getElementById("calibrateBtn");
+const userBreathGroup = document.getElementById("userBreathGroup");
+const sensorBreathGroup = document.getElementById("sensorBreathGroup");
+const sensorBreathValue = document.getElementById("sensorBreathValue");
+const toggleBtn = document.getElementById("toggleBtn");
+const uiPanel = document.getElementById("ui");
+
+// Сворачивание / разворачивание
+let panelVisible = true;
+toggleBtn.addEventListener("click", () => {
+  panelVisible = !panelVisible;
+  if (panelVisible) {
+    uiPanel.classList.remove("collapsed");
+    toggleBtn.textContent = "⚙";
+  } else {
+    uiPanel.classList.add("collapsed");
+    toggleBtn.textContent = "⚙";
+  }
+});
+
+coherenceSlider.addEventListener("input", () => coherenceValue.textContent = parseFloat(coherenceSlider.value).toFixed(2));
+breathRateSlider.addEventListener("input", () => breathRateValue.textContent = parseFloat(breathRateSlider.value).toFixed(1));
+guideRateSlider.addEventListener("input", () => guideRateValue.textContent = parseFloat(guideRateSlider.value).toFixed(1));
+
+modeSelect.addEventListener("change", () => {
+  const isSensor = modeSelect.value === "sensor";
+  userBreathGroup.style.display = isSensor ? "none" : "flex";
+  sensorBreathGroup.style.display = isSensor ? "flex" : "none";
+  startSensorBtn.style.display = isSensor ? "inline-block" : "none";
+  calibrateBtn.style.display = isSensor ? "inline-block" : "none";
+  axisSelect.style.display = isSensor ? "inline-block" : "none";
+  if (!isSensor) {
+    stopSensor();
+  }
+});
+
+// ---------- Кольца (множители пользователя) ----------
+const ringsDef = [
+  { count: 28*5, rMin: 55,  rMax: 110, dotMin: 6/5,  dotMax: 10/5, rotSpeed: 2.0 },
+  { count: 32*5, rMin: 85,  rMax: 165, dotMin: 7/5,  dotMax: 10/5, rotSpeed: 1.0 },
+  { count: 36*5, rMin: 115, rMax: 220, dotMin: 6/5,  dotMax: 11/5, rotSpeed: 0.5 },
+  { count: 40*5, rMin: 145, rMax: 285, dotMin: 6/5,  dotMax: 14/5, rotSpeed: 0.25 }
+];
+
+const particles = [];
+const chaosState = [];
+
+ringsDef.forEach((ring, ringIdx) => {
+  for (let i = 0; i < ring.count; i++) {
+    const angle = (Math.PI * 2 * i) / ring.count;
+    particles.push({
+      ringIdx,
+      dotIdx: i,
+      baseAngle: angle,
+      grayShade: 120 + Math.floor(Math.random() * 100)
+    });
+  }
+});
+
+let width, height, centerX, centerY;
+let halfW, halfH;
+
+function resize() {
+  canvas.width = window.innerWidth * window.devicePixelRatio;
+  canvas.height = window.innerHeight * window.devicePixelRatio;
+  ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+  width = window.innerWidth;
+  height = window.innerHeight;
+  centerX = width * 0.5;
+  centerY = height * 0.5;
+  halfW = width * 0.5;
+  halfH = height * 0.5;
+}
+resize();
+window.addEventListener("resize", () => {
+  resize();
+  initChaos();
+});
+
+function smooth(t) {
+  return 0.5 - 0.5 * Math.cos(Math.PI * t);
+}
+function clamp(val, min, max) {
+  return Math.min(max, Math.max(min, val));
+}
+
+function initChaos() {
+  chaosState.length = 0;
+  for (let i = 0; i < particles.length; i++) {
+    chaosState.push({
+      baseX: Math.random() * width,
+      baseY: Math.random() * height,
+      driftX: (Math.random() - 0.5) * 0.4,
+      driftY: (Math.random() - 0.5) * 0.4,
+      phase: Math.random() * Math.PI * 2
+    });
+  }
+}
+initChaos();
+
+const centralMinRadius = 25;
+const centralMaxRadius = 60;
+
+function calcPointCoherence(globalCoherence, dx, dy, dist) {
+  if (dist < 0.001) return 1.0;
+  const cosA = dx / dist;
+  const sinA = dy / dist;
+  const edgeDist = Math.sqrt((halfW * cosA) ** 2 + (halfH * sinA) ** 2);
+  const threshold = Math.pow(dist / edgeDist, 3);
+  if (threshold >= 0.999) return globalCoherence >= 1.0 ? 1.0 : 0.0;
+  const effective = (globalCoherence - threshold) / (1.0 - threshold);
+  return clamp(effective, 0.0, 1.0);
+}
+
+// ---------- Вспомогательные функции для комплексных чисел ----------
+function cadd(a, b) { return [a[0] + b[0], a[1] + b[1]]; }
+function csub(a, b) { return [a[0] - b[0], a[1] - b[1]]; }
+function cmul(a, b) {
+  return [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]];
+}
+function cdiv(a, b) {
+  const den = b[0] * b[0] + b[1] * b[1];
+  return [(a[0] * b[0] + a[1] * b[1]) / den, (a[1] * b[0] - a[0] * b[1]) / den];
+}
+function csqrt(a) {
+  const [x, y] = a;
+  const r = Math.sqrt(x * x + y * y);
+  const re = Math.sqrt((r + x) / 2);
+  const im = y >= 0 ? Math.sqrt((r - x) / 2) : -Math.sqrt((r - x) / 2);
+  return [re, im];
+}
+
+// ---------- Класс полосового фильтра Баттерворта 4-го порядка (SOS, Direct Form II Transposed) ----------
+class ButterworthBandpass {
+  constructor() {
+    this.lowFreq = 0.05;
+    this.highFreq = 0.5;
+    this.fs = 0;                // текущая частота дискретизации
+    this.lastTimestamp = null;  // для автоматического определения dt
+    this.sos = [];              // массив секций: { b0, b1, b2, a1, a2 }
+    this.states = [];           // состояния для каждой секции [d1, d2]
+  }
+
+  // Проектирование фильтра под новую частоту дискретизации fs (Гц)
+  design(fs) {
+    this.fs = fs;
+    const fNyq = fs / 2;
+    let fHigh = Math.min(this.highFreq, fNyq * 0.99);
+    let fLow = Math.min(this.lowFreq, fHigh * 0.8);
+    if (fLow >= fHigh) {
+      // вырожденный случай – пропускаем сигнал без фильтрации
+      this.sos = [{ b0: 1, b1: 0, b2: 0, a1: 0, a2: 0 }];
+      this.states = [[0, 0]];
+      return;
+    }
+
+    // Предыскажение частот (frequency warping)
+    const W1 = Math.tan(Math.PI * fLow / fs);
+    const W2 = Math.tan(Math.PI * fHigh / fs);
+    const BW = W2 - W1;
+    const W0 = Math.sqrt(W1 * W2);
+
+    // Полюсы нормированного ФНЧ Баттерворта 2-го порядка (прототип 2-го порядка -> ПФ 4-го порядка)
+    const poles = [
+      [-0.7071067811865476,  0.7071067811865476],
+      [-0.7071067811865476, -0.7071067811865476]
+    ];
+
+    // Преобразование полюсов ФНЧ в полюсы аналогового ПФ
+    const analogPoles = [];
+    for (let [pr, pi] of poles) {
+      const p = [pr, pi];
+      const halfBwP = cmul([BW / 2, 0], p);            // (BW/2)*p
+      const halfBwP_sq = cmul(halfBwP, halfBwP);       // ((BW/2)*p)^2
+      const disc = csub(halfBwP_sq, [W0 * W0, 0]);     // ((BW/2)*p)^2 - W0^2
+      const sqrtDisc = csqrt(disc);
+      const sp1 = cadd(halfBwP, sqrtDisc);
+      const sp2 = csub(halfBwP, sqrtDisc);
+      analogPoles.push(sp1, sp2);
+    }
+
+    // Билинейное преобразование аналоговых полюсов в цифровые: z = (1+sp)/(1-sp)
+    const zpoles = analogPoles.map(sp => {
+      const num = cadd([1, 0], sp);
+      const den = csub([1, 0], sp);
+      return cdiv(num, den);
+    });
+
+    // Группировка комплексно-сопряжённых полюсов в биквадратные секции
+    const sosSections = [];
+    const used = new Array(zpoles.length).fill(false);
+    for (let i = 0; i < zpoles.length; i++) {
+      if (used[i]) continue;
+      const zi = zpoles[i];
+      if (Math.abs(zi[1]) < 1e-12) continue; // вещественный полюс (не должно случиться)
+      // Поиск сопряжённого полюса
+      for (let j = i + 1; j < zpoles.length; j++) {
+        if (used[j]) continue;
+        if (Math.abs(zpoles[j][0] - zi[0]) < 1e-7 && Math.abs(zpoles[j][1] + zi[1]) < 1e-7) {
+          const [zr, zi_] = zi;
+          const a1 = -2 * zr;
+          const a2 = zr * zr + zi_ * zi_;
+          // Секция с нулями в z=1 и z=-1 (числитель 1 - z^-2)
+          sosSections.push({ b0: 1, b1: 0, b2: -1, a1, a2 });
+          used[i] = used[j] = true;
+          break;
+        }
+      }
+    }
+
+    if (sosSections.length !== 2) {
+      // fallback
+      this.sos = [{ b0: 1, b1: 0, b2: 0, a1: 0, a2: 0 }];
+      this.states = [[0, 0]];
+      return;
+    }
+
+    // Нормализация усиления на центральной частоте
+    const f0 = Math.sqrt(fLow * fHigh);
+    const w0 = 2 * Math.PI * f0 / fs;
+    let totalMag = 1.0;
+    for (let sec of sosSections) {
+      const { a1, a2 } = sec;
+      const cosw = Math.cos(w0);
+      const sinw = Math.sin(w0);
+      const cos2w = Math.cos(2 * w0);
+      const sin2w = Math.sin(2 * w0);
+      // числитель (1 - z^{-2})
+      const numRe = 1 - cos2w;
+      const numIm = sin2w;
+      // знаменатель (1 + a1*z^{-1} + a2*z^{-2})
+      const denRe = 1 + a1 * cosw + a2 * cos2w;
+      const denIm = -a1 * sinw - a2 * sin2w;
+      const mag = Math.sqrt(numRe * numRe + numIm * numIm) /
+                  Math.sqrt(denRe * denRe + denIm * denIm);
+      totalMag *= mag;
+    }
+    const scale = 1 / totalMag;
+    for (let sec of sosSections) {
+      sec.b0 *= scale;
+      sec.b2 *= scale;
+    }
+
+    this.sos = sosSections;
+    this.states = sosSections.map(() => [0, 0]);
+  }
+
+  // Обработка одного отсчёта (sample – значение, timestamp – performance.now() в мс)
+  process(sample, timestamp) {
+    // Автоматическое определение и обновление частоты дискретизации
+    if (this.lastTimestamp !== null) {
+      const dt = (timestamp - this.lastTimestamp) / 1000; // секунды
+      if (dt > 0 && dt < 1) {
+        let fs = 1 / dt;
+        fs = clamp(fs, 20, 200); // ограничение стабильности
+        if (Math.abs(fs - this.fs) / Math.max(this.fs, 1) > 0.05 || this.sos.length === 0) {
+          this.design(fs);
+        }
+      }
+    }
+    this.lastTimestamp = timestamp;
+
+    // Прямая фильтрация (Direct Form II Transposed)
+    let y = sample;
+    for (let i = 0; i < this.sos.length; i++) {
+      const sec = this.sos[i];
+      const st = this.states[i];
+      let d1 = st[0];
+      let d2 = st[1];
+      const w = y;
+      y = sec.b0 * w + d1;
+      d1 = sec.b1 * w - sec.a1 * y + d2;
+      d2 = sec.b2 * w - sec.a2 * y;
+      st[0] = d1;
+      st[1] = d2;
+    }
+    return y;
+  }
+}
+
+// ---------- Класс адаптивной нормализации по окну последних 5 секунд ----------
+class AdaptiveNormalizer {
+  constructor(windowMs = 5000) {
+    this.windowMs = windowMs;
+    this.buffer = []; // { t: timestamp, v: value }
+  }
+
+  process(value, timestamp) {
+    // Добавляем новый отсчёт
+    this.buffer.push({ t: timestamp, v: value });
+    // Удаляем всё, что старше windowMs
+    const now = timestamp;
+    while (this.buffer.length > 0 && now - this.buffer[0].t > this.windowMs) {
+      this.buffer.shift();
+    }
+    if (this.buffer.length === 0) return 0.5;
+
+    let min = Infinity, max = -Infinity;
+    for (let item of this.buffer) {
+      if (item.v < min) min = item.v;
+      if (item.v > max) max = item.v;
+    }
+    const range = max - min;
+    if (range < 1e-6) return 0.5;
+
+    let phase = (value - min) / range;
+    return clamp(phase, 0, 1);
+  }
+}
+
+// ---------- Датчик ----------
+let sensorActive = false;
+let breathPhaseSensor = 0.5;
+let lastPeakTime = 0;
+let breathPeriods = [];
+const MAX_PERIODS = 12;
+
+let useMouseEmulation = false;
+let mouseY = height / 2;
+let mouseSmoothed = 0.5;
+
+// Экземпляры фильтра и нормализатора (создаются при старте реального датчика)
+let bandpass = null;
+let normalizer = null;
+
+// Функция извлечения сырого значения в зависимости от выбранной оси
+function getRawSensorValue(e) {
+  const axis = axisSelect.value;
+  switch (axis) {
+    case "gyro_beta":   return e.rotationRate?.beta || 0;
+    case "gyro_gamma":  return e.rotationRate?.gamma || 0;
+    case "gyro_alpha":  return e.rotationRate?.alpha || 0;
+    case "accel_x":     return e.accelerationIncludingGravity?.x || 0;
+    case "accel_y":     return e.accelerationIncludingGravity?.y || 0;
+    case "accel_z":     return e.accelerationIncludingGravity?.z || 0;
+    default: return 0;
+  }
+}
+
+function onDeviceMotion(e) {
+  const now = performance.now();
+  const raw = getRawSensorValue(e);
+  if (!bandpass || !normalizer) return;
+
+  // Фильтрация и адаптивная нормализация
+  const filtered = bandpass.process(raw, now);
+  breathPhaseSensor = normalizer.process(filtered, now);
+
+  // Обнаружение пиков для BPM (без изменений)
+  if (breathPhaseSensor > 0.5 && lastPeakTime === 0) {
+    lastPeakTime = now;
+  } else if (breathPhaseSensor > 0.5 && lastPeakTime > 0 && (now - lastPeakTime) > 1500) {
+    const period = now - lastPeakTime;
+    breathPeriods.push(period);
+    if (breathPeriods.length > MAX_PERIODS) breathPeriods.shift();
+    lastPeakTime = now;
+  }
+}
+
+function onMouseMove(e) {
+  mouseY = e.clientY;
+}
+
+async function handleStartSensor() {
+  if (sensorActive) {
+    stopSensor();
+    startSensorBtn.textContent = 'Старт';
+    return;
+  }
+
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      const permission = await DeviceMotionEvent.requestPermission();
+      if (permission !== 'granted') {
+        throw new Error('Permission denied');
+      }
+    }
+    window.addEventListener('devicemotion', onDeviceMotion);
+    sensorActive = true;
+    useMouseEmulation = false;
+    // Инициализация фильтра и нормализатора
+    bandpass = new ButterworthBandpass();
+    normalizer = new AdaptiveNormalizer(5000);
+    breathPeriods = [];
+    lastPeakTime = 0;
+    startSensorBtn.textContent = 'Стоп';
+    calibrateBtn.style.display = 'inline-block';
+    return;
+  } catch (err) {
+    console.warn('Гироскоп/акселерометр недоступен, включаем мышь:', err);
+    window.removeEventListener('devicemotion', onDeviceMotion);
+  }
+
+  // Эмуляция мышью (фильтр не используется)
+  useMouseEmulation = true;
+  window.addEventListener('mousemove', onMouseMove);
+  sensorActive = true;
+  bandpass = null;
+  normalizer = null;
+  breathPhaseSensor = 0.5;
+  breathPeriods = [];
+  lastPeakTime = 0;
+  mouseSmoothed = 0.5;
+  sensorBreathValue.textContent = 'мышь';
+  startSensorBtn.textContent = 'Стоп';
+  calibrateBtn.style.display = 'inline-block';
+}
+
+function stopSensor() {
+  if (!sensorActive) return;
+  if (useMouseEmulation) {
+    window.removeEventListener('mousemove', onMouseMove);
+  } else {
+    window.removeEventListener('devicemotion', onDeviceMotion);
+  }
+  sensorActive = false;
+  useMouseEmulation = false;
+  breathPhaseSensor = 0.5;
+  bandpass = null;
+  normalizer = null;
+  breathPeriods = [];
+  lastPeakTime = 0;
+  startSensorBtn.textContent = 'Старт';
+  calibrateBtn.style.display = 'inline-block';
+  sensorBreathValue.textContent = '--';
+}
+
+startSensorBtn.addEventListener("click", handleStartSensor);
+
+calibrateBtn.addEventListener("click", () => {
+  if (sensorActive && !useMouseEmulation) {
+    // Полный сброс фильтра и нормализатора
+    bandpass = new ButterworthBandpass();
+    normalizer = new AdaptiveNormalizer(5000);
+  }
+  breathPhaseSensor = 0.5;
+  lastPeakTime = 0;
+  breathPeriods = [];
+  sensorBreathValue.textContent = '-- BPM';
+});
+
+// ---------- Главный цикл ----------
+function render(time) {
+  ctx.clearRect(0, 0, width, height);
+
+  const globalCoherence = parseFloat(coherenceSlider.value);
+  const guideBPM = parseFloat(guideRateSlider.value);
+  const guideFreq = guideBPM / 60;
+  const guidePhase = (Math.sin(time * 0.001 * Math.PI * 2 * guideFreq) + 1) * 0.5;
+
+  let userPhase;
+  const mode = modeSelect.value;
+  if (mode === 'sim') {
+    const userBPM = parseFloat(breathRateSlider.value);
+    const userFreq = userBPM / 60;
+    userPhase = (Math.sin(time * 0.001 * Math.PI * 2 * userFreq) + 1) * 0.5;
+    if (sensorActive) stopSensor();
+  } else {
+    if (useMouseEmulation) {
+      const targetPhase = clamp(1.0 - (mouseY / height), 0, 1);
+      mouseSmoothed += (targetPhase - mouseSmoothed) * 0.1;
+      breathPhaseSensor = mouseSmoothed;
+    }
+    userPhase = breathPhaseSensor;
+    if (breathPeriods.length > 0) {
+      const avg = breathPeriods.reduce((a,b) => a+b, 0) / breathPeriods.length;
+      const bpm = 60000 / avg;
+      sensorBreathValue.textContent = bpm.toFixed(1) + ' BPM';
+    } else if (!useMouseEmulation) {
+      sensorBreathValue.textContent = '-- BPM';
+    }
+  }
+
+  const easedUser = smooth(userPhase);
+
+  // Хаос
+  const tSec = time * 0.001;
+  for (let i = 0; i < particles.length; i++) {
+    const cs = chaosState[i];
+    const driftX = Math.sin(tSec * 0.5 + cs.phase) * 25 * cs.driftX;
+    const driftY = Math.cos(tSec * 0.7 + cs.phase) * 25 * cs.driftY;
+    cs.currentX = clamp(cs.baseX + driftX, 0, width);
+    cs.currentY = clamp(cs.baseY + driftY, 0, height);
+  }
+
+  // Точки
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
+    const ring = ringsDef[p.ringIdx];
+    const cs = chaosState[i];
+
+    const dx = cs.currentX - centerX;
+    const dy = cs.currentY - centerY;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const pointCoherence = calcPointCoherence(globalCoherence, dx, dy, dist);
+
+    const radius = ring.rMin + (ring.rMax - ring.rMin) * easedUser;
+    const dotSize = ring.dotMin + (ring.dotMax - ring.dotMin) * easedUser;
+    const rotation = time * 0.00015 * ring.rotSpeed;
+    const angle = p.baseAngle + rotation;
+    const idealX = centerX + Math.cos(angle) * radius;
+    const idealY = centerY + Math.sin(angle) * radius;
+
+    const x = cs.currentX + (idealX - cs.currentX) * pointCoherence;
+    const y = cs.currentY + (idealY - cs.currentY) * pointCoherence;
+
+    const shade = p.grayShade;
+    const alpha = 0.25 + 0.7 * pointCoherence;
+    const glow = dotSize * (1.0 + pointCoherence * 2.5);
+
+    ctx.beginPath();
+    ctx.arc(x, y, dotSize, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(${shade},${shade},${shade},${alpha})`;
+    ctx.shadowColor = `rgba(${shade},${shade},${shade},${alpha*0.6})`;
+    ctx.shadowBlur = glow;
+    ctx.fill();
+  }
+
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+
+  const centralRadius = centralMinRadius + (centralMaxRadius - centralMinRadius) * guidePhase;
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, centralRadius, 0, Math.PI*2);
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+
+  requestAnimationFrame(render);
+}
+
+requestAnimationFrame(render);
+</script>
+</body>
+</html>
