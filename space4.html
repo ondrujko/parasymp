@@ -250,7 +250,7 @@ class ButterworthBandpass {
 
 // ---------- Адаптивная нормализация по окну 5 секунд ----------
 class AdaptiveNormalizer {
-  constructor(windowMs = 5000) { this.windowMs = windowMs; this.buffer = []; }
+  constructor(windowMs = 20000) { this.windowMs = windowMs; this.buffer = []; }
   process(value, timestamp) {
     this.buffer.push({ t: timestamp, v: value });
     const now = timestamp;
@@ -348,7 +348,7 @@ async function handleStartSensor() {
     useMouseEmulation = false;
 
     bandpass = new ButterworthBandpass();
-    normalizer = new AdaptiveNormalizer(5000);
+    normalizer = new AdaptiveNormalizer(20000);
     fsCalibration = { timestamps: [], done: false };
 
     breathPeriods = [];
@@ -402,7 +402,7 @@ startSensorBtn.addEventListener("click", handleStartSensor);
 calibrateBtn.addEventListener("click", () => {
   if (sensorActive && !useMouseEmulation) {
     bandpass = new ButterworthBandpass();
-    normalizer = new AdaptiveNormalizer(5000);
+    normalizer = new AdaptiveNormalizer(20000);
     fsCalibration = { timestamps: [], done: false };
   }
   breathPhaseSensor = 0.5;
