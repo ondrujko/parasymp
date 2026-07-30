@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="color-scheme" content="dark">
+  <title>Parasymp</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    #ui { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: center; background: rgba(20,20,30,0.8); padding: 12px 24px; border-radius: 40px; color: #fff; backdrop-filter: blur(8px); box-shadow: 0 4px 20px rgba(0,0,0,0.6); transition: opacity 0.3s, transform 0.3s; }
+    #ui.collapsed { opacity: 0; pointer-events: none; transform: translateX(-50%) translateY(20px); }
+    .slider-group { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .slider-group label { font-size: 0.8em; opacity: 0.8; }
+    .slider-group span { font-size: 0.9em; font-weight: bold; }
+    input[type=range] { width: 100px; }
+    select, button { padding: 6px 14px; border-radius: 20px; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: white; font-size: 14px; cursor: pointer; }
+    select:hover, button:hover { background: rgba(255,255,255,0.25); }
+    button.primary { background: rgba(100,150,255,0.3); border-color: rgba(100,150,255,0.6); }
+    #toggleBtn { position: fixed; bottom: 20px; left: 20px; width: 44px; height: 44px; border-radius: 50%; background: rgba(20,20,30,0.8); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.3); color: white; font-size: 20px; display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 100; box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+    @media (max-width: 600px) { #ui { flex-direction: column; gap: 8px; padding: 10px 20px; } input[type=range] { width: 80px; } }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<button id="toggleBtn" title="Свернуть панель">⚙</button>
+
+<div id="ui">
+  <div class="slider-group">
+    <label>Хаос ↔ Когерентность</label>
+    <input type="range" id="coherenceSlider" min="0" max="1" step="0.01" value="0.5">
+    <span id="coherenceValue">0.50</span>
+  </div>
+  <div class="slider-group" id="userBreathGroup">
+    <label>Дыхание пользователя (вдох/мин)</label>
+    <input type="range" id="breathRateSlider" min="3" max="18" step="0.5" value="6">
+    <span id="breathRateValue">6.0</span>
+  </div>
+  <div class="slider-group" id="sensorBreathGroup" style="display: none;">
+    <label>Ваше дыхание</label>
+    <span id="sensorBreathValue">--</span>
+  </div>
+  <div class="slider-group">
+    <label>Ритм-гид (вдох/мин)</label>
+    <input type="range" id="guideRateSlider" min="3" max="18" step="0.5" value="6">
+    <span id="guideRateValue">6.0</span>
+  </div>
+  <div style="display: flex; gap: 8px; align-items: center;">
+    <label>Режим:</label>
+    <select id="modeSelect">
+      <option value="sim">Симуляция</option>
+      <option value="sensor">Датчик</option>
+    </select>
+    <label>Источник:</label>
+    <select id="axisSelect" style="display:none;">
+      <option value="gyro_beta">Гироскоп β (X)</option>
+      <option value="gyro_gamma">Гироскоп γ (Y)</option>
+      <option value="gyro_alpha">Гироскоп α (Z)</option>
+      <option value="accel_x">Акселерометр X</option>
+      <option value="accel_y">Акселерометр Y</option>
+      <option value="accel_z">Акселерометр Z</option>
+    </select>
+    <button id="startSensorBtn" class="primary" style="display:none;">Старт</button>
+    <button id="calibrateBtn" style="display:none;">Сброс</button>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+// ---------- UI ----------
+const coherenceSlider = document.getElementById("coherenceSlider");
+const coherenceValue = document.getElementById("coherenceValue");
+const breathRateSlider = document.getElementById("breathRateSlider");
+const breathRateValue = document.getElementById("breathRateValue");
+const guideRateSlider = document.getElementById("guideRateSlider");
+const guideRateValue = document.getElementById("guideRateValue");
+const modeSelect = document.getElementById("modeSelect");
+const axisSelect = document.getElementById("axisSelect");
+const startSensorBtn = document.getElementById("startSensorBtn");
+const calibrateBtn = document.getElementById("calibrateBtn");
+const userBreathGroup = document.getElementById("userBreathGroup");
+const sensorBreathGroup = document.getElementById("sensorBreathGroup");
+const sensorBreathValue = document.getElementById("sensorBreathValue");
+const toggleBtn = document.getElementById("toggleBtn");
+const uiPanel = document.getElementById("ui");
+
+let panelVisible = true;
+toggleBtn.addEventListener("click", () => {
+  panelVisible = !panelVisible;
+  uiPanel.classList.toggle("collapsed", !panelVisible);
+  toggleBtn.textContent = panelVisible ? "⚙" : "⚙";
+});
+
+coherenceSlider.addEventListener("input", () => coherenceValue.textContent = parseFloat(coherenceSlider.value).toFixed(2));
+breathRateSlider.addEventListener("input", () => breathRateValue.textContent = parseFloat(breathRateSlider.value).toFixed(1));
+guideRateSlider.addEventListener("input", () => guideRateValue.textContent = parseFloat(guideRateSlider.value).toFixed(1));
+
+modeSelect.addEventListener("change", () => {
+  const isSensor = modeSelect.value === "sensor";
+  userBreathGroup.style.display = isSensor ? "none" : "flex";
+  sensorBreathGroup.style.display = isSensor ? "flex" : "none";
+  startSensorBtn.style.display = isSensor ? "inline-block" : "none";
+  calibrateBtn.style.display = isSensor ? "inline-block" : "none";
+  axisSelect.style.display = isSensor ? "inline-block" : "none";
+  if (!isSensor) stopSensor();
+});
+
+// ---------- Кольца ----------
+const ringsDef = [
+  { count: 28*5, rMin: 55,  rMax: 110, dotMin: 6/5,  dotMax: 10/5, rotSpeed: 2.0 },
+  { count: 32*5, rMin: 85,  rMax: 165, dotMin: 7/5,  dotMax: 10/5, rotSpeed: 1.0 },
+  { count: 36*5, rMin: 115, rMax: 220, dotMin: 6/5,  dotMax: 11/5, rotSpeed: 0.5 },
+  { count: 40*5, rMin: 145, rMax: 285, dotMin: 6/5,  dotMax: 14/5, rotSpeed: 0.25 }
+];
+
+const particles = [];
+const chaosState = [];
+ringsDef.forEach((ring, ringIdx) => {
+  for (let i = 0; i < ring.count; i++) {
+    const angle = (Math.PI * 2 * i) / ring.count;
+    particles.push({
+      ringIdx, dotIdx: i, baseAngle: angle,
+      grayShade: 120 + Math.floor(Math.random() * 100)
+    });
+  }
+});
+
+let width, height, centerX, centerY, halfW, halfH;
+function resize() {
+  canvas.width = window.innerWidth * window.devicePixelRatio;
+  canvas.height = window.innerHeight * window.devicePixelRatio;
+  ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+  width = window.innerWidth; height = window.innerHeight;
+  centerX = width * 0.5; centerY = height * 0.5;
+  halfW = width * 0.5; halfH = height * 0.5;
+}
+resize();
+window.addEventListener("resize", () => { resize(); initChaos(); });
+
+function smooth(t) { return 0.5 - 0.5 * Math.cos(Math.PI * t); }
+function clamp(val, min, max) { return Math.min(max, Math.max(min, val)); }
+
+function initChaos() {
+  chaosState.length = 0;
+  for (let i = 0; i < particles.length; i++) {
+    chaosState.push({
+      baseX: Math.random() * width, baseY: Math.random() * height,
+      driftX: (Math.random() - 0.5) * 0.4, driftY: (Math.random() - 0.5) * 0.4,
+      phase: Math.random() * Math.PI * 2
+    });
+  }
+}
+initChaos();
+
+const centralMinRadius = 25, centralMaxRadius = 60;
+
+function calcPointCoherence(globalCoherence, dx, dy, dist) {
+  if (dist < 0.001) return 1.0;
+  const cosA = dx / dist, sinA = dy / dist;
+  const edgeDist = Math.sqrt((halfW * cosA) ** 2 + (halfH * sinA) ** 2);
+  const threshold = Math.pow(dist / edgeDist, 3);
+  if (threshold >= 0.999) return globalCoherence >= 1.0 ? 1.0 : 0.0;
+  return clamp((globalCoherence - threshold) / (1.0 - threshold), 0.0, 1.0);
+}
+
+// ---------- ПРАВИЛЬНЫЙ SOS-фильтр Баттерворта 4-го порядка (0.05–0.5 Гц) для fs = 100 Гц ----------
+// Коэффициенты рассчитаны через scipy.signal.butter(4, [0.05, 0.5], btype='bandpass', fs=100, output='sos')
+// Реализация: Direct Form II Transposed (в точности как в SciPy)
+class ButterworthBandpass {
+  constructor() {
+    this.sos = [
+      { b0: 0.000000038505331, b1: 0.000000077010662, b2: 0.000000038505331, a1: -1.954727287860989, a2: 0.955392752631585 },
+      { b0: 1.000000000000000, b1: 2.000000000000000, b2: 1.000000000000000, a1: -1.979658775126937, a2: 0.980596019888476 },
+      { b0: 1.000000000000000, b1: -2.000000000000000, b2: 1.000000000000000, a1: -1.993391260088610, a2: 0.993405524070732 },
+      { b0: 1.000000000000000, b1: -2.000000000000000, b2: 1.000000000000000, a1: -1.997948314805010, a2: 0.997958595847031 }
+    ];
+    this.states = this.sos.map(() => [0, 0]); // [d1, d2] для каждой секции
+  }
+
+  process(sample) {
+    let x = sample;
+    for (let i = 0; i < this.sos.length; i++) {
+      const sec = this.sos[i];
+      const [d1, d2] = this.states[i];
+      
+      // Direct Form II Transposed
+      const y = sec.b0 * x + d1;
+      const new_d1 = sec.b1 * x - sec.a1 * y + d2;
+      const new_d2 = sec.b2 * x - sec.a2 * y;
+      
+      this.states[i] = [new_d1, new_d2];
+      x = y; // выход этой секции становится входом для следующей
+    }
+    return x;
+  }
+
+  reset() {
+    this.states = this.sos.map(() => [0, 0]);
+  }
+}
+
+// ---------- Простая нормализация (аналог глобальной в Python) ----------
+// O(1) по памяти и времени. Без тяжелых массивов и операций .shift()
+class SimpleNormalizer {
+  constructor() {
+    this.min = Infinity;
+    this.max = -Infinity;
+  }
+  process(value) {
+    if (value < this.min) this.min = value;
+    if (value > this.max) this.max = value;
+    const range = this.max - this.min;
+    if (range < 1e-6) return 0.5;
+    return (value - this.min) / range;
+  }
+  reset() {
+    this.min = Infinity;
+    this.max = -Infinity;
+  }
+}
+
+// ---------- Датчик ----------
+let sensorActive = false;
+let breathPhaseSensor = 0.5;
+let lastPeakTime = 0;
+let breathPeriods = [];
+const MAX_PERIODS = 12;
+
+let useMouseEmulation = false;
+let mouseY = height / 2;
+let mouseSmoothed = 0.5;
+
+let bandpass = null;
+let normalizer = null;
+
+function getRawSensorValue(e) {
+  const axis = axisSelect.value;
+  switch (axis) {
+    case "gyro_beta":   return e.rotationRate?.beta || 0;
+    case "gyro_gamma":  return e.rotationRate?.gamma || 0;
+    case "gyro_alpha":  return e.rotationRate?.alpha || 0;
+    case "accel_x":     return e.accelerationIncludingGravity?.x || 0;
+    case "accel_y":     return e.accelerationIncludingGravity?.y || 0;
+    case "accel_z":     return e.accelerationIncludingGravity?.z || 0;
+    default: return 0;
+  }
+}
+
+function onDeviceMotion(e) {
+  const now = performance.now();
+  const raw = getRawSensorValue(e);
+  if (!bandpass || !normalizer) return;
+
+  const filtered = bandpass.process(raw);
+  breathPhaseSensor = normalizer.process(filtered);
+
+  // детектор пиков
+  if (breathPhaseSensor > 0.5 && lastPeakTime === 0) {
+    lastPeakTime = now;
+  } else if (breathPhaseSensor > 0.5 && lastPeakTime > 0 && (now - lastPeakTime) > 1500) {
+    const period = now - lastPeakTime;
+    breathPeriods.push(period);
+    if (breathPeriods.length > MAX_PERIODS) breathPeriods.shift();
+    lastPeakTime = now;
+  }
+}
+
+function onMouseMove(e) { mouseY = e.clientY; }
+
+async function handleStartSensor() {
+  if (sensorActive) { stopSensor(); startSensorBtn.textContent = 'Старт'; return; }
+
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      const permission = await DeviceMotionEvent.requestPermission();
+      if (permission !== 'granted') throw new Error('Permission denied');
+    }
+    window.addEventListener('devicemotion', onDeviceMotion);
+    sensorActive = true;
+    useMouseEmulation = false;
+
+    // Инициализация фильтра и нормализатора для фиксированных 100 Гц
+    bandpass = new ButterworthBandpass();
+    normalizer = new SimpleNormalizer();
+
+    breathPeriods = [];
+    lastPeakTime = 0;
+    startSensorBtn.textContent = 'Стоп';
+    calibrateBtn.style.display = 'inline-block';
+    return;
+  } catch (err) {
+    console.warn('Гироскоп/акселерометр недоступен, включаем эмуляцию мышью:', err);
+    window.removeEventListener('devicemotion', onDeviceMotion);
+  }
+
+  // Эмуляция мышью (фоллбэк)
+  useMouseEmulation = true;
+  window.addEventListener('mousemove', onMouseMove);
+  sensorActive = true;
+  bandpass = null;
+  normalizer = null;
+  breathPhaseSensor = 0.5;
+  breathPeriods = [];
+  lastPeakTime = 0;
+  mouseSmoothed = 0.5;
+  sensorBreathValue.textContent = 'мышь';
+  startSensorBtn.textContent = 'Стоп';
+  calibrateBtn.style.display = 'inline-block';
+}
+
+function stopSensor() {
+  if (!sensorActive) return;
+  if (useMouseEmulation) {
+    window.removeEventListener('mousemove', onMouseMove);
+  } else {
+    window.removeEventListener('devicemotion', onDeviceMotion);
+  }
+  sensorActive = false;
+  useMouseEmulation = false;
+  breathPhaseSensor = 0.5;
+  bandpass = null;
+  normalizer = null;
+  breathPeriods = [];
+  lastPeakTime = 0;
+  startSensorBtn.textContent = 'Старт';
+  calibrateBtn.style.display = 'inline-block';
+  sensorBreathValue.textContent = '--';
+}
+
+startSensorBtn.addEventListener("click", handleStartSensor);
+
+calibrateBtn.addEventListener("click", () => {
+  if (sensorActive && !useMouseEmulation) {
+    bandpass.reset();
+    normalizer.reset();
+  }
+  breathPhaseSensor = 0.5;
+  lastPeakTime = 0;
+  breathPeriods = [];
+  sensorBreathValue.textContent = '-- BPM';
+});
+
+// ---------- Главный цикл ----------
+function render(time) {
+  ctx.clearRect(0, 0, width, height);
+  const globalCoherence = parseFloat(coherenceSlider.value);
+  const guideBPM = parseFloat(guideRateSlider.value);
+  const guidePhase = (Math.sin(time * 0.001 * Math.PI * 2 * (guideBPM / 60)) + 1) * 0.5;
+
+  let userPhase;
+  if (modeSelect.value === 'sim') {
+    const userBPM = parseFloat(breathRateSlider.value);
+    userPhase = (Math.sin(time * 0.001 * Math.PI * 2 * (userBPM / 60)) + 1) * 0.5;
+    if (sensorActive) stopSensor();
+  } else {
+    if (useMouseEmulation) {
+      const target = clamp(1.0 - mouseY / height, 0, 1);
+      mouseSmoothed += (target - mouseSmoothed) * 0.1;
+      breathPhaseSensor = mouseSmoothed;
+    }
+    userPhase = breathPhaseSensor;
+    if (breathPeriods.length > 0) {
+      const avg = breathPeriods.reduce((a,b) => a+b, 0) / breathPeriods.length;
+      sensorBreathValue.textContent = (60000 / avg).toFixed(1) + ' BPM';
+    } else if (!useMouseEmulation) {
+      sensorBreathValue.textContent = '-- BPM';
+    }
+  }
+
+  const easedUser = smooth(userPhase);
+
+  // Хаос
+  const tSec = time * 0.001;
+  for (let i = 0; i < particles.length; i++) {
+    const cs = chaosState[i];
+    cs.currentX = clamp(cs.baseX + Math.sin(tSec*0.5 + cs.phase)*25*cs.driftX, 0, width);
+    cs.currentY = clamp(cs.baseY + Math.cos(tSec*0.7 + cs.phase)*25*cs.driftY, 0, height);
+  }
+
+  // Точки
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i], ring = ringsDef[p.ringIdx], cs = chaosState[i];
+    const dx = cs.currentX - centerX, dy = cs.currentY - centerY;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const pointCoherence = calcPointCoherence(globalCoherence, dx, dy, dist);
+
+    const radius = ring.rMin + (ring.rMax - ring.rMin) * easedUser;
+    const dotSize = ring.dotMin + (ring.dotMax - ring.dotMin) * easedUser;
+    const angle = p.baseAngle + time * 0.00015 * ring.rotSpeed;
+    const idealX = centerX + Math.cos(angle) * radius;
+    const idealY = centerY + Math.sin(angle) * radius;
+
+    const x = cs.currentX + (idealX - cs.currentX) * pointCoherence;
+    const y = cs.currentY + (idealY - cs.currentY) * pointCoherence;
+    const shade = p.grayShade;
+    const alpha = 0.25 + 0.7 * pointCoherence;
+
+    ctx.beginPath();
+    ctx.arc(x, y, dotSize, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(${shade},${shade},${shade},${alpha})`;
+    ctx.shadowColor = `rgba(${shade},${shade},${shade},${alpha*0.6})`;
+    ctx.shadowBlur = dotSize * (1 + pointCoherence * 2.5);
+    ctx.fill();
+  }
+
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+
+  const centralR = centralMinRadius + (centralMaxRadius - centralMinRadius) * guidePhase;
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, centralR, 0, Math.PI*2);
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+
+  requestAnimationFrame(render);
+}
+
+requestAnimationFrame(render);
+</script>
+</body>
+</html>
