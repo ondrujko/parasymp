@@ -168,8 +168,6 @@ function calcPointCoherence(globalCoherence, dx, dy, dist) {
 }
 
 // ---------- ПРАВИЛЬНЫЙ SOS-фильтр Баттерворта 4-го порядка (0.05–0.5 Гц) для fs = 100 Гц ----------
-// Коэффициенты рассчитаны через scipy.signal.butter(4, [0.05, 0.5], btype='bandpass', fs=100, output='sos')
-// Реализация: Direct Form II Transposed (в точности как в SciPy)
 class ButterworthBandpass {
   constructor() {
     this.sos = [
@@ -178,7 +176,7 @@ class ButterworthBandpass {
       { b0: 1.000000000000000, b1: -2.000000000000000, b2: 1.000000000000000, a1: -1.993391260088610, a2: 0.993405524070732 },
       { b0: 1.000000000000000, b1: -2.000000000000000, b2: 1.000000000000000, a1: -1.997948314805010, a2: 0.997958595847031 }
     ];
-    this.states = this.sos.map(() => [0, 0]); // [d1, d2] для каждой секции
+    this.states = this.sos.map(() => [0, 0]);
   }
 
   process(sample) {
@@ -187,39 +185,18 @@ class ButterworthBandpass {
       const sec = this.sos[i];
       const [d1, d2] = this.states[i];
       
-      // Direct Form II Transposed
       const y = sec.b0 * x + d1;
       const new_d1 = sec.b1 * x - sec.a1 * y + d2;
       const new_d2 = sec.b2 * x - sec.a2 * y;
       
       this.states[i] = [new_d1, new_d2];
-      x = y; // выход этой секции становится входом для следующей
+      x = y;
     }
     return x;
   }
 
   reset() {
     this.states = this.sos.map(() => [0, 0]);
-  }
-}
-
-// ---------- Простая нормализация (аналог глобальной в Python) ----------
-// O(1) по памяти и времени. Без тяжелых массивов и операций .shift()
-class SimpleNormalizer {
-  constructor() {
-    this.min = Infinity;
-    this.max = -Infinity;
-  }
-  process(value) {
-    if (value < this.min) this.min = value;
-    if (value > this.max) this.max = value;
-    const range = this.max - this.min;
-    if (range < 1e-6) return 0.5;
-    return (value - this.min) / range;
-  }
-  reset() {
-    this.min = Infinity;
-    this.max = -Infinity;
   }
 }
 
@@ -235,7 +212,6 @@ let mouseY = height / 2;
 let mouseSmoothed = 0.5;
 
 let bandpass = null;
-let normalizer = null;
 
 function getRawSensorValue(e) {
   const axis = axisSelect.value;
@@ -253,15 +229,20 @@ function getRawSensorValue(e) {
 function onDeviceMotion(e) {
   const now = performance.now();
   const raw = getRawSensorValue(e);
-  if (!bandpass || !normalizer) return;
+  if (!bandpass) return;
 
   const filtered = bandpass.process(raw);
-  breathPhaseSensor = normalizer.process(filtered);
+  
+  // НОРМАЛИЗАЦИЯ ПОЛНОСТЬЮ УБРАНА. Сигнал подается напрямую.
+  // Если визуализация слишком слабая или сильная, раскомментируйте строку ниже и подберите коэффициент:
+  // breathPhaseSensor = filtered * 10; 
+  breathPhaseSensor = filtered;
 
-  // детектор пиков
-  if (breathPhaseSensor > 0.5 && lastPeakTime === 0) {
+  // Детектор пиков (адаптирован под сырой сигнал, ищем переход через 0 или локальный максимум)
+  // Для простоты оставим логику, но она будет зависеть от амплитуды сырого сигнала
+  if (breathPhaseSensor > 0 && lastPeakTime === 0) {
     lastPeakTime = now;
-  } else if (breathPhaseSensor > 0.5 && lastPeakTime > 0 && (now - lastPeakTime) > 1500) {
+  } else if (breathPhaseSensor > 0 && lastPeakTime > 0 && (now - lastPeakTime) > 1500) {
     const period = now - lastPeakTime;
     breathPeriods.push(period);
     if (breathPeriods.length > MAX_PERIODS) breathPeriods.shift();
@@ -283,9 +264,7 @@ async function handleStartSensor() {
     sensorActive = true;
     useMouseEmulation = false;
 
-    // Инициализация фильтра и нормализатора для фиксированных 100 Гц
     bandpass = new ButterworthBandpass();
-    normalizer = new SimpleNormalizer();
 
     breathPeriods = [];
     lastPeakTime = 0;
@@ -297,12 +276,10 @@ async function handleStartSensor() {
     window.removeEventListener('devicemotion', onDeviceMotion);
   }
 
-  // Эмуляция мышью (фоллбэк)
   useMouseEmulation = true;
   window.addEventListener('mousemove', onMouseMove);
   sensorActive = true;
   bandpass = null;
-  normalizer = null;
   breathPhaseSensor = 0.5;
   breathPeriods = [];
   lastPeakTime = 0;
@@ -323,7 +300,6 @@ function stopSensor() {
   useMouseEmulation = false;
   breathPhaseSensor = 0.5;
   bandpass = null;
-  normalizer = null;
   breathPeriods = [];
   lastPeakTime = 0;
   startSensorBtn.textContent = 'Старт';
@@ -336,7 +312,6 @@ startSensorBtn.addEventListener("click", handleStartSensor);
 calibrateBtn.addEventListener("click", () => {
   if (sensorActive && !useMouseEmulation) {
     bandpass.reset();
-    normalizer.reset();
   }
   breathPhaseSensor = 0.5;
   lastPeakTime = 0;
@@ -373,7 +348,6 @@ function render(time) {
 
   const easedUser = smooth(userPhase);
 
-  // Хаос
   const tSec = time * 0.001;
   for (let i = 0; i < particles.length; i++) {
     const cs = chaosState[i];
@@ -381,13 +355,14 @@ function render(time) {
     cs.currentY = clamp(cs.baseY + Math.cos(tSec*0.7 + cs.phase)*25*cs.driftY, 0, height);
   }
 
-  // Точки
   for (let i = 0; i < particles.length; i++) {
     const p = particles[i], ring = ringsDef[p.ringIdx], cs = chaosState[i];
     const dx = cs.currentX - centerX, dy = cs.currentY - centerY;
     const dist = Math.sqrt(dx*dx + dy*dy);
     const pointCoherence = calcPointCoherence(globalCoherence, dx, dy, dist);
 
+    // Если userPhase выходит за пределы 0..1, radius может стать некорректным. 
+    // Это ожидаемое поведение при отсутствии нормализации.
     const radius = ring.rMin + (ring.rMax - ring.rMin) * easedUser;
     const dotSize = ring.dotMin + (ring.dotMax - ring.dotMin) * easedUser;
     const angle = p.baseAngle + time * 0.00015 * ring.rotSpeed;
@@ -400,7 +375,7 @@ function render(time) {
     const alpha = 0.25 + 0.7 * pointCoherence;
 
     ctx.beginPath();
-    ctx.arc(x, y, dotSize, 0, Math.PI*2);
+    ctx.arc(x, y, Math.max(0.1, dotSize), 0, Math.PI*2); // Math.max предотвращает ошибки рендеринга при отрицательном размере
     ctx.fillStyle = `rgba(${shade},${shade},${shade},${alpha})`;
     ctx.shadowColor = `rgba(${shade},${shade},${shade},${alpha*0.6})`;
     ctx.shadowBlur = dotSize * (1 + pointCoherence * 2.5);
