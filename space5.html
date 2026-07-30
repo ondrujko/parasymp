@@ -304,7 +304,7 @@ async function handleStartSensor() {
     useMouseEmulation = false;
 
     bandpass = new ButterworthBandpass();
-    normalizer = new SmoothNormalizer(0.01); // alpha = 0.01 для плавной адаптации
+    normalizer = new SmoothNormalizer(0.05); // alpha = 0.01 для плавной адаптации
 
     breathPeriods = [];
     lastPeakTime = 0;
