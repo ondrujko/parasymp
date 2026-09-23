@@ -54,17 +54,17 @@
       <option value="sensor">Датчик</option>
     </select>
     <label>Источник:</label>
-<select id="axisSelect" style="display:none;">
-  <option value="gyro_beta">Гироскоп β (X)</option>
-  <option value="gyro_gamma">Гироскоп γ (Y)</option>
-  <option value="gyro_alpha">Гироскоп α (Z)</option>
-  <option value="accel_x">Акселерометр X</option>
-  <option value="accel_y">Акселерометр Y</option>
-  <option value="accel_z">Акселерометр Z</option>
-  <option value="orientation_beta" selected>Ориентация β (pitch)</option>
-  <option value="orientation_gamma">Ориентация γ (roll)</option>
-  <option value="orientation_alpha">Ориентация α (yaw)</option>
-</select>
+    <select id="axisSelect" style="display:none;">
+      <option value="orientation_beta" selected>Ориентация β (pitch)</option>
+      <option value="orientation_gamma">Ориентация γ (roll)</option>
+      <option value="orientation_alpha">Ориентация α (yaw)</option>
+      <option value="gyro_beta">Гироскоп β (X)</option>
+      <option value="gyro_gamma">Гироскоп γ (Y)</option>
+      <option value="gyro_alpha">Гироскоп α (Z)</option>
+      <option value="accel_x">Акселерометр X</option>
+      <option value="accel_y">Акселерометр Y</option>
+      <option value="accel_z">Акселерометр Z</option>
+    </select>
     <button id="startSensorBtn" class="primary" style="display:none;">Старт</button>
     <button id="calibrateBtn" style="display:none;">Сброс</button>
   </div>
@@ -260,24 +260,49 @@ let mouseSmoothed = 0.5;
 let bandpass = null;
 let normalizer = null;
 
-function getRawSensorValue(e) {
+// Последние прочитанные значения сенсоров
+let lastMotion = { ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0 };
+let lastOrientation = { alpha: 0, beta: 0, gamma: 0 };
+
+function getRawSensorValue() {
   const axis = axisSelect.value;
   switch (axis) {
-    case "gyro_beta":   return e.rotationRate?.beta || 0;
-    case "gyro_gamma":  return e.rotationRate?.gamma || 0;
-    case "gyro_alpha":  return e.rotationRate?.alpha || 0;
-    case "accel_x":     return e.accelerationIncludingGravity?.x || 0;
-    case "accel_y":     return e.accelerationIncludingGravity?.y || 0;
-    case "accel_z":     return e.accelerationIncludingGravity?.z || 0;
+    case "gyro_beta":   return lastMotion.gx;   // beta  гироскопа = X
+    case "gyro_gamma":  return lastMotion.gy;   // gamma гироскопа = Y
+    case "gyro_alpha":  return lastMotion.gz;   // alpha гироскопа = Z
+    case "accel_x":     return lastMotion.ax;
+    case "accel_y":     return lastMotion.ay;
+    case "accel_z":     return lastMotion.az;
+    case "orientation_beta":  return lastOrientation.beta;   // pitch, градусы
+    case "orientation_gamma": return lastOrientation.gamma;  // roll,  градусы
+    case "orientation_alpha": return lastOrientation.alpha;  // yaw,   градусы
     default: return 0;
   }
 }
 
+// Обработчики событий — только сохраняют последние значения
 function onDeviceMotion(e) {
-  const now = performance.now();
-  const raw = getRawSensorValue(e);
-  if (!bandpass || !normalizer) return;
+  const a = e.accelerationIncludingGravity || {};
+  const r = e.rotationRate || {};
+  lastMotion.ax = a.x || 0;
+  lastMotion.ay = a.y || 0;
+  lastMotion.az = a.z || 0;
+  lastMotion.gx = r.beta  || 0;   // iOS называет оси rotationRate: beta/gamma/alpha
+  lastMotion.gy = r.gamma || 0;
+  lastMotion.gz = r.alpha || 0;
+}
 
+function onDeviceOrientation(e) {
+  lastOrientation.alpha = e.alpha ?? 0;   // yaw
+  lastOrientation.beta  = e.beta  ?? 0;   // pitch
+  lastOrientation.gamma = e.gamma ?? 0;   // roll
+}
+
+// Тикает в requestAnimationFrame-ритме (примерно 60 раз/сек)
+function onSensorTick(now) {
+  if (!sensorActive || useMouseEmulation || !bandpass || !normalizer) return;
+
+  const raw = getRawSensorValue();
   const filtered = bandpass.process(raw);
   breathPhaseSensor = normalizer.process(filtered);
 
@@ -298,25 +323,42 @@ async function handleStartSensor() {
   if (sensorActive) { stopSensor(); startSensorBtn.textContent = 'Старт'; return; }
 
   try {
-    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-      const permission = await DeviceMotionEvent.requestPermission();
-      if (permission !== 'granted') throw new Error('Permission denied');
+    // iOS 13+: оба разрешения
+    if (typeof DeviceMotionEvent !== 'undefined' &&
+        typeof DeviceMotionEvent.requestPermission === 'function') {
+      const mp = await DeviceMotionEvent.requestPermission();
+      if (mp !== 'granted') throw new Error('Motion permission denied');
     }
+    if (typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const op = await DeviceOrientationEvent.requestPermission();
+      if (op !== 'granted') throw new Error('Orientation permission denied');
+    }
+
     window.addEventListener('devicemotion', onDeviceMotion);
+    window.addEventListener('deviceorientation', onDeviceOrientation);
     sensorActive = true;
     useMouseEmulation = false;
 
     bandpass = new ButterworthBandpass();
-    normalizer = new SmoothNormalizer(0.05); // alpha = 0.01 для плавной адаптации
+    normalizer = new SmoothNormalizer(0.05);
 
     breathPeriods = [];
     lastPeakTime = 0;
     startSensorBtn.textContent = 'Стоп';
     calibrateBtn.style.display = 'inline-block';
+
+    // Запускаем собственный тикер обработки
+    (function loop(t) {
+      if (!sensorActive) return;
+      onSensorTick(t);
+      requestAnimationFrame(loop);
+    })(performance.now());
     return;
   } catch (err) {
-    console.warn('Гироскоп/акселерометр недоступен, включаем эмуляцию мышью:', err);
+    console.warn('Сенсоры недоступны, включаем эмуляцию мышью:', err);
     window.removeEventListener('devicemotion', onDeviceMotion);
+    window.removeEventListener('deviceorientation', onDeviceOrientation);
   }
 
   useMouseEmulation = true;
@@ -339,6 +381,7 @@ function stopSensor() {
     window.removeEventListener('mousemove', onMouseMove);
   } else {
     window.removeEventListener('devicemotion', onDeviceMotion);
+    window.removeEventListener('deviceorientation', onDeviceOrientation);
   }
   sensorActive = false;
   useMouseEmulation = false;
