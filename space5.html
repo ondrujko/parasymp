@@ -54,14 +54,17 @@
       <option value="sensor">Датчик</option>
     </select>
     <label>Источник:</label>
-    <select id="axisSelect" style="display:none;">
-      <option value="gyro_beta">Гироскоп β (X)</option>
-      <option value="gyro_gamma">Гироскоп γ (Y)</option>
-      <option value="gyro_alpha">Гироскоп α (Z)</option>
-      <option value="accel_x">Акселерометр X</option>
-      <option value="accel_y">Акселерометр Y</option>
-      <option value="accel_z">Акселерометр Z</option>
-    </select>
+<select id="axisSelect" style="display:none;">
+  <option value="gyro_beta">Гироскоп β (X)</option>
+  <option value="gyro_gamma">Гироскоп γ (Y)</option>
+  <option value="gyro_alpha">Гироскоп α (Z)</option>
+  <option value="accel_x">Акселерометр X</option>
+  <option value="accel_y">Акселерометр Y</option>
+  <option value="accel_z">Акселерометр Z</option>
+  <option value="orientation_beta" selected>Ориентация β (pitch)</option>
+  <option value="orientation_gamma">Ориентация γ (roll)</option>
+  <option value="orientation_alpha">Ориентация α (yaw)</option>
+</select>
     <button id="startSensorBtn" class="primary" style="display:none;">Старт</button>
     <button id="calibrateBtn" style="display:none;">Сброс</button>
   </div>
